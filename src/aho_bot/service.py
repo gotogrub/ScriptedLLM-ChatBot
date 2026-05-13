@@ -1,0 +1,440 @@
+from datetime import datetime, timezone
+import hashlib
+import json
+
+from aho_bot.config import load_settings
+from aho_bot.data import DataRepository
+from aho_bot.domain import FIELD_LABELS, REQUEST_SPECS, SCENARIO_CHOICES
+from aho_bot.entities import extract_entities
+from aho_bot.intents import classify_control, classify_request_type, is_capability_question, is_procurement_capability_question
+from aho_bot.llm import LLMClient
+from aho_bot.rag import RagRetriever
+from aho_bot.schemas import ChatResult, to_plain
+from aho_bot.scripted_validator import ScriptedLLMValidator
+from aho_bot.storage import ChatStorage
+
+
+class AhoBotService:
+    def __init__(self, settings=None):
+        self.settings = settings or load_settings()
+        self.repository = DataRepository(self.settings)
+        self.storage = ChatStorage(self.settings.database_path)
+        self.retriever = RagRetriever(self.repository.documents())
+        self.validator = ScriptedLLMValidator(self.repository)
+        self.llm = LLMClient(self.settings)
+
+    def handle_message(self, user_id, message, runtime_options=None):
+        options = self.llm.runtime_options(runtime_options)
+        llm_traces = []
+        text = (message or "").strip()
+        if not text:
+            return self.empty_message(user_id)
+        self.storage.add_message(user_id, "user", text)
+        session = self.storage.load_session(user_id)
+        control = classify_control(text)
+        if is_capability_question(text):
+            result = self.capability_result(user_id, text, options, session)
+            self.storage.add_message(user_id, "assistant", result.answer)
+            return result
+        if control == "status":
+            result = self.status_result(user_id)
+            self.storage.add_message(user_id, "assistant", result.answer)
+            return result
+        if control == "cancel":
+            self.storage.reset_session(user_id)
+            result = ChatResult(
+                user_id=user_id,
+                answer="Черновик сброшен. Напишите, какую заявку нужно оформить.",
+                state="idle",
+                intent="cancel",
+                quick_replies=[label for _, label in SCENARIO_CHOICES],
+            )
+            self.storage.add_message(user_id, "assistant", result.answer)
+            return result
+        if session.get("request_type") and control == "confirm":
+            result = self.confirm_ticket(user_id, session, options)
+            self.storage.add_message(user_id, "assistant", result.answer)
+            return result
+        if session.get("request_type") and control == "edit":
+            session["state"] = "collecting"
+            self.storage.save_session(session)
+            result = ChatResult(
+                user_id=user_id,
+                answer="Напишите новое значение для поля, которое нужно изменить.",
+                state="collecting",
+                intent="edit",
+                request_type=session["request_type"],
+                draft=session.get("draft", {}),
+            )
+            self.storage.add_message(user_id, "assistant", result.answer)
+            return result
+        request_type = session.get("request_type") or classify_request_type(text)
+        if not request_type:
+            result = self.unknown_intent(user_id)
+            self.storage.add_message(user_id, "assistant", result.answer)
+            return result
+        if not session.get("request_type"):
+            session["request_type"] = request_type
+            session["draft"] = {}
+        updates = extract_entities(request_type, text, self.repository, user_id, session.get("draft", {}))
+        session["draft"] = self.merge_draft(session.get("draft", {}), updates)
+        missing = self.missing_fields(request_type, session["draft"])
+        citations = self.retrieve_citations(text, request_type, options)
+        if missing:
+            session["state"] = "collecting"
+            llm_result = self.ask_for_field(request_type, missing[0], citations, options, session["draft"])
+            answer = llm_result.text
+            llm_traces.append(llm_result.trace)
+            quick_replies = REQUEST_SPECS[request_type].get("quick_replies", {}).get(missing[0], [])
+            intent = request_type
+        else:
+            session["state"] = "ready_for_confirmation"
+            llm_result = self.confirmation_text(request_type, session["draft"], citations, options)
+            answer = llm_result.text
+            llm_traces.append(llm_result.trace)
+            quick_replies = ["Подтвердить", "Изменить", "Отменить"]
+            intent = "ready_for_confirmation"
+        validation = self.validator.validate_response(answer, request_type, citations)
+        if not validation.valid:
+            answer = "Не могу отдать этот ответ: он не прошел ScriptedLLM-валидацию. Уточните данные по заявке."
+            quick_replies = ["Отменить"]
+        self.storage.save_session(session)
+        result = ChatResult(
+            user_id=user_id,
+            answer=answer,
+            state=session["state"],
+            intent=intent,
+            request_type=request_type,
+            draft=session["draft"],
+            missing_fields=missing,
+            quick_replies=quick_replies,
+            citations=[to_plain(item) for item in citations],
+            validated=validation.valid,
+            violations=validation.violations,
+            debug=self.debug_payload(options, text, request_type, missing, citations, llm_traces, validation),
+        )
+        self.storage.add_message(user_id, "assistant", result.answer)
+        return result
+
+    def empty_message(self, user_id):
+        return ChatResult(
+            user_id=user_id,
+            answer="Напишите запрос по АХО: заказ, SIM-карта, командировка, парковка, такси или Непорядок.",
+            state="idle",
+            intent="empty",
+            quick_replies=[label for _, label in SCENARIO_CHOICES],
+        )
+
+    def unknown_intent(self, user_id):
+        return ChatResult(
+            user_id=user_id,
+            answer="Я могу помочь с заявками АХО. Выберите сценарий или опишите запрос другими словами.",
+            state="idle",
+            intent="unknown",
+            quick_replies=[label for _, label in SCENARIO_CHOICES],
+        )
+
+    def status_result(self, user_id):
+        tickets = self.storage.list_tickets(user_id)
+        if not tickets:
+            answer = "У вас пока нет созданных заявок."
+        else:
+            rows = []
+            for ticket in tickets[:5]:
+                title = REQUEST_SPECS.get(ticket["type"], {}).get("title", ticket["type"])
+                rows.append(f"{ticket['id']}: {title}, статус {ticket['status']}")
+            answer = "Последние заявки:\n" + "\n".join(rows)
+        return ChatResult(user_id=user_id, answer=answer, state="status", intent="status")
+
+    def merge_draft(self, draft, updates):
+        merged = dict(draft)
+        for key, value in updates.items():
+            if value in [None, "", []]:
+                continue
+            if key == "items" and merged.get("items"):
+                merged["items"] = self.merge_items(merged["items"], value)
+            else:
+                merged[key] = value
+        return merged
+
+    def merge_items(self, existing, incoming):
+        result = [dict(item) for item in existing]
+        for new_item in incoming:
+            marker = new_item.get("url") or new_item.get("name")
+            found = False
+            for old_item in result:
+                old_marker = old_item.get("url") or old_item.get("name")
+                if old_marker == marker:
+                    if new_item.get("quantity"):
+                        old_item["quantity"] = new_item["quantity"]
+                    found = True
+            if not found:
+                result.append(new_item)
+        return result
+
+    def missing_fields(self, request_type, draft):
+        missing = []
+        for field in REQUEST_SPECS[request_type]["required_fields"]:
+            if field == "item_quantities":
+                items = draft.get("items") or []
+                if not items or any(not item.get("quantity") for item in items):
+                    missing.append(field)
+                continue
+            if field not in draft or draft[field] in [None, "", []]:
+                missing.append(field)
+        return missing
+
+    def capability_result(self, user_id, text, options, session):
+        if is_procurement_capability_question(text):
+            request_type = "stationery_order"
+            citations = self.retrieve_citations(text, request_type, options)
+            answer = (
+                "Можно заказать канцтовары из Комус: ручки, карандаши, бумагу А4, блокноты, маркеры, стикеры, стаканчики и салфетки.\n"
+                "Из ВкусВилл доступны продукты для кухни: кофе, молоко, чай, сахар, печенье, вода и фрукты.\n"
+                "Напишите позиции и количество, можно также прислать ссылку на товар."
+            )
+            quick_replies = ["Карандаши 10, молоко 2, кофе 1", "Бумага А4 5 пачек", "Ссылка на товар, 5 штук"]
+        else:
+            request_type = session.get("request_type")
+            citations = self.retriever.retrieve(text + " АХО заявки услуги регламент", limit=4)
+            answer = (
+                "Я могу оформить заявки АХО: закупки Комус и ВкусВилл, корпоративную SIM-карту, командировку, парковку, такси и Непорядок.\n"
+                "Если данных не хватает, я задам уточняющие вопросы и соберу JSON-заявку."
+            )
+            quick_replies = [label for _, label in SCENARIO_CHOICES]
+        return ChatResult(
+            user_id=user_id,
+            answer=answer,
+            state=session.get("state", "idle"),
+            intent="capabilities",
+            request_type=request_type,
+            draft=session.get("draft", {}),
+            quick_replies=quick_replies,
+            citations=[to_plain(item) for item in citations],
+            debug=self.debug_payload(options, text, request_type, [], citations, [], None),
+        )
+
+    def ask_for_field(self, request_type, field, citations, options, draft):
+        question = self.follow_up_fallback(request_type, field, draft)
+        source_text = self.source_line(citations)
+        fallback = f"{question} {source_text}".strip()
+        facts = self.facts_text(citations)
+        prompt = f"Верни один короткий уточняющий вопрос пользователю. Не меняй запрашиваемое поле: {fallback}"
+        llm_result = self.llm.compose(prompt, facts, fallback, options, "follow_up")
+        return self.guard_follow_up(llm_result, field, fallback)
+
+    def follow_up_fallback(self, request_type, field, draft):
+        if request_type == "stationery_order" and field == "item_quantities":
+            items = self.item_names(draft)
+            if items:
+                return f"Понял позиции: {items}. Уточните количество по каждой позиции."
+        if request_type == "stationery_order" and field == "office":
+            return "В какой офис доставить заказ: Центральный офис, Склад или Сервис-центр?"
+        if request_type == "stationery_order" and field == "delivery_priority":
+            return "Какая срочность у заказа: срочно, сегодня или планово?"
+        return REQUEST_SPECS[request_type]["questions"][field]
+
+    def guard_follow_up(self, llm_result, field, fallback):
+        value = llm_result.text.lower()
+        use_fallback = False
+        if field == "item_quantities":
+            use_fallback = ("колич" not in value and "сколько" not in value) or "ссыл" in value
+        if field == "items":
+            use_fallback = "что" not in value and "пози" not in value and "товар" not in value
+        if field == "office":
+            use_fallback = not all(word in value for word in ["централь", "склад", "сервис"])
+        if field == "delivery_priority":
+            use_fallback = not all(word in value for word in ["срочно", "сегодня", "план"])
+        if use_fallback:
+            llm_result.trace["status"] = "guarded_fallback"
+            llm_result.trace["guarded_reason"] = f"wrong follow-up for {field}"
+            llm_result.trace["fallback"] = fallback
+            llm_result.text = fallback
+        return llm_result
+
+    def item_names(self, draft):
+        items = draft.get("items") or []
+        names = [item.get("name") for item in items if item.get("name")]
+        return ", ".join(names)
+
+    def confirmation_text(self, request_type, draft, citations, options):
+        title = REQUEST_SPECS[request_type]["title"]
+        lines = [f"Собрал данные для заявки: {title}.", self.render_draft(request_type, draft)]
+        lines.append("Подтвердите создание заявки или напишите, что изменить.")
+        source_text = self.source_line(citations)
+        if source_text:
+            lines.append(source_text)
+        fallback = "\n".join(line for line in lines if line)
+        return self.llm.compose(
+            json.dumps(draft, ensure_ascii=False),
+            self.facts_text(citations),
+            fallback,
+            options,
+            "confirmation",
+        )
+
+    def confirm_ticket(self, user_id, session, options=None):
+        options = self.llm.runtime_options(options)
+        request_type = session.get("request_type")
+        draft = session.get("draft", {})
+        if not request_type:
+            return self.unknown_intent(user_id)
+        missing = self.missing_fields(request_type, draft)
+        citations = self.retrieve_citations(json.dumps(draft, ensure_ascii=False), request_type, options)
+        if missing:
+            session["state"] = "collecting"
+            self.storage.save_session(session)
+            llm_result = self.ask_for_field(request_type, missing[0], citations, options, draft)
+            answer = llm_result.text
+            return ChatResult(
+                user_id=user_id,
+                answer=answer,
+                state="collecting",
+                intent="missing_fields",
+                request_type=request_type,
+                draft=draft,
+                missing_fields=missing,
+                quick_replies=REQUEST_SPECS[request_type].get("quick_replies", {}).get(missing[0], []),
+                citations=[to_plain(item) for item in citations],
+                debug=self.debug_payload(options, "", request_type, missing, citations, [llm_result.trace], None),
+            )
+        ticket = self.build_ticket(user_id, request_type, draft, citations)
+        validation = self.validator.validate_ticket(ticket)
+        if not validation.valid:
+            return ChatResult(
+                user_id=user_id,
+                answer="Заявка не создана: данные не прошли валидацию.",
+                state="collecting",
+                intent="validation_failed",
+                request_type=request_type,
+                draft=draft,
+                violations=validation.violations,
+                validated=False,
+                debug=self.debug_payload(options, "", request_type, missing, citations, [], validation),
+            )
+        self.storage.create_ticket(ticket)
+        self.storage.reset_session(user_id)
+        answer = "Заявка создана.\n" + json.dumps(ticket, ensure_ascii=False, indent=2)
+        return ChatResult(
+            user_id=user_id,
+            answer=answer,
+            state="ticket_created",
+            intent="confirm",
+            request_type=request_type,
+            ticket=ticket,
+            citations=[to_plain(item) for item in citations],
+            debug=self.debug_payload(options, "", request_type, [], citations, [], validation),
+        )
+
+    def build_ticket(self, user_id, request_type, draft, citations):
+        ticket_id = self.ticket_id(user_id, request_type, draft)
+        now = utc_now()
+        return {
+            "id": ticket_id,
+            "type": request_type,
+            "service": REQUEST_SPECS[request_type]["service"],
+            "user_id": user_id,
+            "status": "created",
+            "payload": draft,
+            "sources": [{"title": item.title, "source": item.source} for item in citations],
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def ticket_id(self, user_id, request_type, draft):
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+        seed = f"{user_id}:{request_type}:{json.dumps(draft, ensure_ascii=False, sort_keys=True)}:{utc_now()}"
+        digest = hashlib.sha256(seed.encode("utf-8")).digest()
+        suffix = "".join(alphabet[item % len(alphabet)] for item in digest[:8])
+        return f"AHO-{suffix}"
+
+    def retrieve_citations(self, text, request_type, options=None):
+        categories = REQUEST_SPECS[request_type]["allowed_categories"]
+        query = f"{text} {REQUEST_SPECS[request_type]['title']}"
+        limit = self.clamp_int((options or {}).get("rag_top_k", self.settings.rag_top_k), 1, 8)
+        return self.retriever.retrieve(query, categories=categories, limit=limit)
+
+    def facts_text(self, citations):
+        return "\n".join(f"{item.title}: {item.text}" for item in citations)
+
+    def source_line(self, citations):
+        if not citations:
+            return ""
+        sources = ", ".join(item.source for item in citations)
+        return f"Источник: {sources}."
+
+    def render_draft(self, request_type, draft):
+        lines = []
+        for field in REQUEST_SPECS[request_type]["required_fields"]:
+            if field == "item_quantities":
+                continue
+            value = draft.get(field)
+            if value in [None, "", []]:
+                continue
+            label = FIELD_LABELS.get(field, field)
+            lines.append(f"{label}: {self.format_value(value)}")
+        return "\n".join(lines)
+
+    def format_value(self, value):
+        if isinstance(value, bool):
+            return "да" if value else "нет"
+        if isinstance(value, list):
+            parts = []
+            for item in value:
+                if isinstance(item, dict):
+                    name = item.get("name", "Позиция")
+                    quantity = item.get("quantity") or "не указано"
+                    url = item.get("url")
+                    if url:
+                        parts.append(f"{name}, {quantity}, {url}")
+                    else:
+                        parts.append(f"{name}, {quantity}")
+                else:
+                    parts.append(str(item))
+            return "; ".join(parts)
+        return str(value)
+
+    def debug_payload(self, options, user_message, request_type, missing, citations, llm_traces, validation):
+        payload = {
+            "provider": options.get("provider"),
+            "model": options.get("model"),
+            "base_url": options.get("base_url"),
+            "rag": {
+                "top_k": self.clamp_int(options.get("rag_top_k", self.settings.rag_top_k), 1, 8),
+                "request_type": request_type,
+                "missing_fields": missing,
+                "chunks": [self.chunk_debug(index, item) for index, item in enumerate(citations, start=1)],
+            },
+            "llm": llm_traces,
+        }
+        if user_message:
+            payload["message"] = user_message
+        if validation:
+            payload["validation"] = {
+                "valid": validation.valid,
+                "violations": validation.violations,
+            }
+        return payload
+
+    def chunk_debug(self, index, item):
+        return {
+            "rank": index,
+            "id": item.id,
+            "title": item.title,
+            "category": item.category,
+            "source": item.source,
+            "score": item.score,
+            "characters": len(item.text),
+            "text": item.text,
+        }
+
+    def clamp_int(self, value, minimum, maximum):
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            number = minimum
+        return max(minimum, min(maximum, number))
+
+
+def utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")

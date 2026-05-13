@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Assistant</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <section class="chat">
+        <header class="topbar">
+          <div>
+            <h1>Assistant</h1>
+            <p>Заявки на заказ товаров</p>
+          </div>
+          <div class="session">
+            <label for="userId">Пользователь</label>
+            <input id="userId" value="demo" autocomplete="off">
+          </div>
+        </header>
+        <div id="messages" class="messages"></div>
+        <div id="quickReplies" class="quick-replies"></div>
+        <form id="chatForm" class="composer">
+          <textarea id="messageInput" rows="2" placeholder="Напишите запрос"></textarea>
+          <button type="submit">Отправить</button>
+          <button type="button" id="resetButton" class="secondary">Сбросить</button>
+        </form>
+      </section>
+      <aside class="side">
+        <section>
+          <h2>LLM</h2>
+          <div class="control-grid">
+            <label>
+              Provider
+              <select id="providerSelect">
+                <option value="ollama">Ollama</option>
+                <option value="scripted">Scripted</option>
+                <option value="openai-compatible">OpenAI-compatible</option>
+              </select>
+            </label>
+            <label>
+              Model
+              <select id="modelSelect">
+                <option value="">Loading models</option>
+              </select>
+            </label>
+            <label class="wide">
+              Base URL
+              <input id="baseUrlInput" value="http://localhost:11434">
+            </label>
+            <label>
+              Temperature
+              <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="0.1">
+            </label>
+            <label>
+              Top P
+              <input id="topPInput" type="number" min="0" max="1" step="0.05" value="0.8">
+            </label>
+            <label>
+              Top K
+              <input id="topKInput" type="number" min="1" max="200" step="1" value="30">
+            </label>
+            <label>
+              Chunks
+              <input id="ragTopKInput" type="number" min="1" max="8" step="1" value="4">
+            </label>
+            <label>
+              Context
+              <input id="numCtxInput" type="number" min="512" max="32768" step="512" value="4096">
+            </label>
+            <label>
+              Timeout
+              <input id="timeoutInput" type="number" min="3" max="120" step="1" value="30">
+            </label>
+          </div>
+          <button type="button" id="refreshModelsButton" class="panel-button">Обновить модели</button>
+          <button type="button" id="openLogsButton" class="panel-button secondary-panel">Открыть логи</button>
+        </section>
+        <section>
+          <h2>Черновик</h2>
+          <pre id="draftView">Нет активного черновика</pre>
+        </section>
+        <section>
+          <h2>Источники</h2>
+          <div id="sourcesView" class="sources">Источники появятся после запроса</div>
+        </section>
+        <section>
+          <h2>Заявка</h2>
+          <pre id="ticketView">Заявка еще не создана</pre>
+        </section>
+      </aside>
+    </main>
+    <dialog id="logsDialog" class="log-dialog">
+      <div class="log-shell">
+        <header class="log-header">
+          <h2>Логи</h2>
+          <button type="button" id="closeLogsButton">Закрыть</button>
+        </header>
+        <nav class="log-tabs">
+          <button type="button" class="active" data-tab="trace">Trace</button>
+          <button type="button" data-tab="chunks">Chunks</button>
+          <button type="button" data-tab="payload">Payload</button>
+        </nav>
+        <pre id="traceLogView" class="log-panel active">Логи появятся после запроса</pre>
+        <pre id="chunksLogView" class="log-panel">Chunks появятся после запроса</pre>
+        <pre id="payloadLogView" class="log-panel">Payload появится после запроса</pre>
+      </div>
+    </dialog>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

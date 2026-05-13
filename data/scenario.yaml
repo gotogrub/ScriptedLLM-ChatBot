@@ -1,0 +1,34 @@
+name: "AХО Assistant"
+initial_state: idle
+states:
+  idle:
+    intents:
+      - stationery_order
+      - sim_card
+      - business_trip
+      - parking_pass
+      - taxi_order
+      - disorder_report
+      - status
+  collecting:
+    validates:
+      - required_fields
+      - scriptedllm_output
+      - domain_schema
+  ready_for_confirmation:
+    intents:
+      - confirm
+      - edit
+      - cancel
+  ticket_created:
+    validates:
+      - json_ticket
+knowledge_base:
+  - data/knowledge.json
+  - data/employees.json
+constraints:
+  - answer_only_with_allowed_facts
+  - ask_follow_up_when_required_fields_missing
+  - do_not_claim_completion_before_ticket_status_created
+  - do_not_offer_unlisted_services
+
