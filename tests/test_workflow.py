@@ -69,9 +69,10 @@ class WorkflowTest(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             service = self.service(tmp)
             service.handle_message("demo", "Заказ канцтоваров")
-            result = service.handle_message("demo", "10 карандашей")
-            self.assertEqual(result.draft["items"][0]["name"], "Карандаши")
-            self.assertEqual(result.draft["items"][0]["quantity"], 10)
+            result = service.handle_message("demo", "10 карандашей и 2 линейки")
+            items = {item["name"]: item["quantity"] for item in result.draft["items"]}
+            self.assertEqual(items["Карандаши"], 10)
+            self.assertEqual(items["Линейки"], 2)
             self.assertNotIn("items", result.missing_fields)
             self.assertNotIn("item_quantities", result.missing_fields)
 
@@ -121,6 +122,26 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(guarded.trace["status"], "guarded_fallback")
             self.assertIn("Склад", guarded.text)
 
+    def test_office_follow_up_guard_rejects_unsupported_restrictions(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            trace = {"status": "generated"}
+            llm_result = type(
+                "Result",
+                (),
+                {
+                    "text": "В какой офис доставить заказ: Центральный офис или Склад? Сервис-центр не используется для закупок.",
+                    "trace": trace,
+                },
+            )()
+            guarded = service.guard_follow_up(
+                llm_result,
+                "office",
+                "В какой офис доставить заказ: Центральный офис, Склад или Сервис-центр?",
+            )
+            self.assertEqual(guarded.trace["status"], "guarded_fallback")
+            self.assertEqual(guarded.text, "В какой офис доставить заказ: Центральный офис, Склад или Сервис-центр?")
+
     def test_items_follow_up_guard_rejects_yes_no_question(self):
         with TemporaryDirectory() as tmp:
             service = self.service(tmp)
@@ -140,6 +161,15 @@ class WorkflowTest(unittest.TestCase):
                 guarded.text,
                 "Напишите, что нужно заказать. Можно перечислить товары или прислать ссылку.",
             )
+
+    def test_procurement_ticket_sources_do_not_include_employee_directory(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            service.handle_message("demo", "Нужно 10 карандашей и 2 линейки в центральный офис сегодня")
+            result = service.handle_message("demo", "Подтвердить")
+            sources = {item["source"] for item in result.ticket["sources"]}
+            self.assertNotIn("KB-HR-001", sources)
+            self.assertNotIn("KB-AHO-OFFICE-003", sources)
 
 
 if __name__ == "__main__":

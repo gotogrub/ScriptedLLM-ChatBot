@@ -113,9 +113,63 @@ function renderState(result) {
 
 function renderLogs(debug) {
   lastDebug = debug;
-  traceLogView.textContent = JSON.stringify(debug, null, 2);
-  chunksLogView.textContent = JSON.stringify(debug.rag ? debug.rag.chunks : [], null, 2);
+  traceLogView.textContent = JSON.stringify(compactTrace(debug), null, 2);
+  chunksLogView.textContent = JSON.stringify(chunkTrace(debug), null, 2);
   payloadLogView.textContent = JSON.stringify(firstPayload(debug), null, 2);
+}
+
+function compactTrace(debug) {
+  if (!debug) {
+    return {status: "empty"};
+  }
+  var trace = {};
+  ["status", "provider", "model", "base_url", "message", "validation", "models"].forEach(function(key) {
+    if (debug[key] !== undefined) {
+      trace[key] = debug[key];
+    }
+  });
+  if (debug.rag) {
+    trace.rag = {
+      top_k: debug.rag.top_k,
+      request_type: debug.rag.request_type,
+      missing_fields: debug.rag.missing_fields || [],
+      chunk_count: debug.rag.chunks ? debug.rag.chunks.length : 0
+    };
+  }
+  trace.llm = (debug.llm || []).map(function(item) {
+    return {
+      purpose: item.purpose,
+      status: item.status,
+      fallback_used: item.fallback_used,
+      provider: item.provider,
+      model: item.model,
+      endpoint: item.endpoint,
+      options: item.options,
+      response: item.response,
+      error: item.error,
+      eval_count: item.eval_count,
+      prompt_eval_count: item.prompt_eval_count
+    };
+  });
+  return trace;
+}
+
+function chunkTrace(debug) {
+  if (!debug || !debug.rag || !debug.rag.chunks) {
+    return [];
+  }
+  return debug.rag.chunks.map(function(chunk) {
+    return {
+      rank: chunk.rank,
+      id: chunk.id,
+      title: chunk.title,
+      category: chunk.category,
+      source: chunk.source,
+      score: chunk.score,
+      characters: chunk.characters,
+      text: chunk.text
+    };
+  });
 }
 
 function firstPayload(debug) {

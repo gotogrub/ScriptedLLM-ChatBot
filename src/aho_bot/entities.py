@@ -37,6 +37,30 @@ ITEM_KEYWORDS = {
         "supplier": "Комус",
         "url": "https://komus.example/catalog/pencils",
     },
+    "линейк": {
+        "name": "Линейки",
+        "category": "Канцтовары",
+        "supplier": "Комус",
+        "url": "https://komus.example/catalog/rulers",
+    },
+    "ластик": {
+        "name": "Ластики",
+        "category": "Канцтовары",
+        "supplier": "Комус",
+        "url": "https://komus.example/catalog/erasers",
+    },
+    "скрепк": {
+        "name": "Скрепки",
+        "category": "Канцтовары",
+        "supplier": "Комус",
+        "url": "https://komus.example/catalog/paper-clips",
+    },
+    "папк": {
+        "name": "Папки",
+        "category": "Канцтовары",
+        "supplier": "Комус",
+        "url": "https://komus.example/catalog/folders",
+    },
     "блокнот": {
         "name": "Блокнот",
         "category": "Канцтовары",
@@ -102,6 +126,12 @@ ITEM_KEYWORDS = {
         "category": "Продукты",
         "supplier": "ВкусВилл",
         "url": "https://vkusvill.example/catalog/water",
+    },
+    "фрукт": {
+        "name": "Фрукты",
+        "category": "Продукты",
+        "supplier": "ВкусВилл",
+        "url": "https://vkusvill.example/catalog/fruits",
     },
     "стаканчик": {
         "name": "Стаканчики",

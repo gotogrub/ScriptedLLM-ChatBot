@@ -80,7 +80,7 @@ class AhoBotService:
         session["draft"] = self.merge_draft(session.get("draft", {}), updates)
         missing = self.missing_fields(request_type, session["draft"])
         field = missing[0] if missing else None
-        citations = self.retrieve_citations(text, request_type, options, field)
+        citations = self.retrieve_citations(text, request_type, options, field, session["draft"])
         if missing:
             session["state"] = "collecting"
             llm_result = self.ask_for_field(request_type, missing[0], citations, options, session["draft"])
@@ -190,11 +190,11 @@ class AhoBotService:
             request_type = "stationery_order"
             citations = self.retrieve_citations(text, request_type, options)
             answer = (
-                "Можно заказать канцтовары из Комус: ручки, карандаши, бумагу А4, блокноты, маркеры, стикеры, стаканчики и салфетки.\n"
+                "Можно заказать канцтовары из Комус: ручки, карандаши, линейки, ластики, скрепки, папки, бумагу А4, блокноты, маркеры, стикеры, стаканчики и салфетки.\n"
                 "Из ВкусВилл доступны продукты для кухни: кофе, молоко, чай, сахар, печенье, вода и фрукты.\n"
                 "Напишите позиции и количество, можно также прислать ссылку на товар."
             )
-            quick_replies = ["Карандаши 10, молоко 2, кофе 1", "Бумага А4 5 пачек", "Ссылка на товар, 5 штук"]
+            quick_replies = ["Карандаши 10, линейки 2", "Бумага А4 5 пачек", "Ссылка на товар, 5 штук"]
         else:
             request_type = session.get("request_type")
             citations = self.retriever.retrieve(text + " АХО заявки услуги регламент", limit=4)
@@ -227,7 +227,7 @@ class AhoBotService:
         if request_type == "stationery_order" and field == "item_quantities":
             items = self.item_names(draft)
             if items:
-                return f"Понял позиции: {items}. Уточните количество по каждой позиции."
+                return f"Понял позиции: {items}. Напишите количество по каждой позиции."
         if request_type == "stationery_order" and field == "office":
             return "В какой офис доставить заказ: Центральный офис, Склад или Сервис-центр?"
         if request_type == "stationery_order" and field == "delivery_priority":
@@ -246,7 +246,8 @@ class AhoBotService:
                 or "можете" in value
             )
         if field == "office":
-            use_fallback = not all(word in value for word in ["централь", "склад", "сервис"])
+            unsupported_rule = any(word in value for word in ["не используется", "недоступ", "нельзя", "не подходит"])
+            use_fallback = unsupported_rule or not all(word in value for word in ["централь", "склад", "сервис"])
         if field == "delivery_priority":
             use_fallback = not all(word in value for word in ["срочно", "сегодня", "план"])
         if use_fallback:
@@ -285,7 +286,7 @@ class AhoBotService:
             return self.unknown_intent(user_id)
         missing = self.missing_fields(request_type, draft)
         field = missing[0] if missing else None
-        citations = self.retrieve_citations(json.dumps(draft, ensure_ascii=False), request_type, options, field)
+        citations = self.retrieve_citations(json.dumps(draft, ensure_ascii=False), request_type, options, field, draft)
         if missing:
             session["state"] = "collecting"
             self.storage.save_session(session)
@@ -353,11 +354,31 @@ class AhoBotService:
         suffix = "".join(alphabet[item % len(alphabet)] for item in digest[:8])
         return f"AHO-{suffix}"
 
-    def retrieve_citations(self, text, request_type, options=None, field=None):
+    def retrieve_citations(self, text, request_type, options=None, field=None, draft=None):
         categories = self.retrieval_categories(request_type, field)
         query = f"{text} {REQUEST_SPECS[request_type]['title']}"
         limit = self.clamp_int((options or {}).get("rag_top_k", self.settings.rag_top_k), 1, 8)
-        return self.retriever.retrieve(query, categories=categories, limit=limit)
+        citations = self.retriever.retrieve(query, categories=categories, limit=limit)
+        if request_type == "stationery_order" and field is None and draft and draft.get("office"):
+            citations = self.only_selected_office(citations, draft["office"], limit)
+        return citations
+
+    def only_selected_office(self, citations, office, limit):
+        result = []
+        office_found = False
+        for item in citations:
+            if item.category != "offices":
+                result.append(item)
+                continue
+            if office in item.title or office in item.text:
+                result.append(item)
+                office_found = True
+        if not office_found:
+            for item in self.retriever.retrieve(office, categories=["offices"], limit=3):
+                if office in item.title or office in item.text:
+                    result.append(item)
+                    break
+        return result[:limit]
 
     def retrieval_categories(self, request_type, field=None):
         if request_type == "stationery_order":
