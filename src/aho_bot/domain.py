@@ -3,7 +3,7 @@ REQUEST_SPECS = {
         "title": "Заказ канцтоваров и продуктов",
         "service": "procurement",
         "required_fields": ["employee", "items", "item_quantities", "office", "delivery_priority"],
-        "allowed_categories": ["procurement", "offices", "employees"],
+        "allowed_categories": ["procurement", "offices"],
         "questions": {
             "employee": "Уточните ФИО сотрудника, для которого оформить заказ.",
             "items": "Напишите, что нужно заказать. Можно перечислить товары или прислать ссылку.",
@@ -138,4 +138,3 @@ SCENARIO_CHOICES = [
     ("taxi_order", "Такси"),
     ("disorder_report", "Непорядок"),
 ]
-

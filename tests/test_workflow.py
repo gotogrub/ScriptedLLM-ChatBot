@@ -65,6 +65,23 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual([item["name"] for item in result.draft["items"]], ["Карандаши", "Молоко", "Кофе"])
             self.assertIn("item_quantities", result.missing_fields)
 
+    def test_procurement_continues_after_scenario_button(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            service.handle_message("demo", "Заказ канцтоваров")
+            result = service.handle_message("demo", "10 карандашей")
+            self.assertEqual(result.draft["items"][0]["name"], "Карандаши")
+            self.assertEqual(result.draft["items"][0]["quantity"], 10)
+            self.assertNotIn("items", result.missing_fields)
+            self.assertNotIn("item_quantities", result.missing_fields)
+
+    def test_procurement_rag_does_not_pull_employee_directory_for_items(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            result = service.handle_message("demo", "Заказ канцтоваров")
+            categories = {item["category"] for item in result.citations}
+            self.assertNotIn("employees", categories)
+
     def test_procurement_capability_question_does_not_start_draft(self):
         with TemporaryDirectory() as tmp:
             service = self.service(tmp)
@@ -103,6 +120,26 @@ class WorkflowTest(unittest.TestCase):
             )
             self.assertEqual(guarded.trace["status"], "guarded_fallback")
             self.assertIn("Склад", guarded.text)
+
+    def test_items_follow_up_guard_rejects_yes_no_question(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            trace = {"status": "generated"}
+            llm_result = type(
+                "Result",
+                (),
+                {"text": "Нужно ли вам перечислить товары или отправить ссылки на них?", "trace": trace},
+            )()
+            guarded = service.guard_follow_up(
+                llm_result,
+                "items",
+                "Напишите, что нужно заказать. Можно перечислить товары или прислать ссылку.",
+            )
+            self.assertEqual(guarded.trace["status"], "guarded_fallback")
+            self.assertEqual(
+                guarded.text,
+                "Напишите, что нужно заказать. Можно перечислить товары или прислать ссылку.",
+            )
 
 
 if __name__ == "__main__":

@@ -27,6 +27,8 @@ class RagRetriever:
         category_set = set(categories or [])
         scored = []
         for document, tokens in self.index:
+            if category_set and document.get("category") not in category_set:
+                continue
             overlap = query_tokens.intersection(tokens)
             score = len(overlap) / math.sqrt(max(len(tokens), 1))
             if category_set and document.get("category") in category_set:
@@ -47,4 +49,3 @@ class RagRetriever:
                 )
             )
         return results
-

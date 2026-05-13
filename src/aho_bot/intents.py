@@ -1,4 +1,5 @@
 from aho_bot.domain import SCENARIO_CHOICES
+import re
 
 
 REQUEST_KEYWORDS = {
@@ -97,8 +98,16 @@ def classify_control(text):
     value = normalize(text)
     for intent, words in CONTROL_KEYWORDS.items():
         if any(word in value for word in words):
-            return intent
+            for word in words:
+                if control_word_matches(value, word):
+                    return intent
     return None
+
+
+def control_word_matches(value, word):
+    if " " in word:
+        return word in value
+    return re.search(rf"\b{re.escape(word)}\b", value) is not None
 
 
 def is_capability_question(text):

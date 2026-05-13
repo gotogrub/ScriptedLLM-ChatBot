@@ -79,7 +79,8 @@ class AhoBotService:
         updates = extract_entities(request_type, text, self.repository, user_id, session.get("draft", {}))
         session["draft"] = self.merge_draft(session.get("draft", {}), updates)
         missing = self.missing_fields(request_type, session["draft"])
-        citations = self.retrieve_citations(text, request_type, options)
+        field = missing[0] if missing else None
+        citations = self.retrieve_citations(text, request_type, options, field)
         if missing:
             session["state"] = "collecting"
             llm_result = self.ask_for_field(request_type, missing[0], citations, options, session["draft"])
@@ -216,9 +217,8 @@ class AhoBotService:
 
     def ask_for_field(self, request_type, field, citations, options, draft):
         question = self.follow_up_fallback(request_type, field, draft)
-        source_text = self.source_line(citations)
-        fallback = f"{question} {source_text}".strip()
-        facts = self.facts_text(citations)
+        fallback = question
+        facts = self.facts_text(citations, 650)
         prompt = f"Верни один короткий уточняющий вопрос пользователю. Не меняй запрашиваемое поле: {fallback}"
         llm_result = self.llm.compose(prompt, facts, fallback, options, "follow_up")
         return self.guard_follow_up(llm_result, field, fallback)
@@ -240,7 +240,11 @@ class AhoBotService:
         if field == "item_quantities":
             use_fallback = ("колич" not in value and "сколько" not in value) or "ссыл" in value
         if field == "items":
-            use_fallback = "что" not in value and "пози" not in value and "товар" not in value
+            use_fallback = (
+                ("что" not in value and "пози" not in value and "товар" not in value)
+                or "нужно ли" in value
+                or "можете" in value
+            )
         if field == "office":
             use_fallback = not all(word in value for word in ["централь", "склад", "сервис"])
         if field == "delivery_priority":
@@ -280,7 +284,8 @@ class AhoBotService:
         if not request_type:
             return self.unknown_intent(user_id)
         missing = self.missing_fields(request_type, draft)
-        citations = self.retrieve_citations(json.dumps(draft, ensure_ascii=False), request_type, options)
+        field = missing[0] if missing else None
+        citations = self.retrieve_citations(json.dumps(draft, ensure_ascii=False), request_type, options, field)
         if missing:
             session["state"] = "collecting"
             self.storage.save_session(session)
@@ -348,14 +353,34 @@ class AhoBotService:
         suffix = "".join(alphabet[item % len(alphabet)] for item in digest[:8])
         return f"AHO-{suffix}"
 
-    def retrieve_citations(self, text, request_type, options=None):
-        categories = REQUEST_SPECS[request_type]["allowed_categories"]
+    def retrieve_citations(self, text, request_type, options=None, field=None):
+        categories = self.retrieval_categories(request_type, field)
         query = f"{text} {REQUEST_SPECS[request_type]['title']}"
         limit = self.clamp_int((options or {}).get("rag_top_k", self.settings.rag_top_k), 1, 8)
         return self.retriever.retrieve(query, categories=categories, limit=limit)
 
-    def facts_text(self, citations):
-        return "\n".join(f"{item.title}: {item.text}" for item in citations)
+    def retrieval_categories(self, request_type, field=None):
+        if request_type == "stationery_order":
+            if field in ["items", "item_quantities", "delivery_priority"]:
+                return ["procurement"]
+            if field == "office":
+                return ["offices"]
+            return ["procurement", "offices"]
+        return [category for category in REQUEST_SPECS[request_type]["allowed_categories"] if category != "employees"]
+
+    def facts_text(self, citations, max_chars=900):
+        rows = []
+        used = 0
+        for item in citations:
+            text = f"{item.title}: {item.text}"
+            if used + len(text) > max_chars:
+                remaining = max_chars - used
+                if remaining > 80:
+                    rows.append(text[:remaining])
+                break
+            rows.append(text)
+            used += len(text)
+        return "\n".join(rows)
 
     def source_line(self, citations):
         if not citations:
