@@ -121,94 +121,203 @@ function renderState(result) {
 
 function renderLogs(debug) {
   lastDebug = debug;
-  traceLogView.textContent = JSON.stringify(compactTrace(debug), null, 2);
-  chunksLogView.textContent = JSON.stringify(chunkTrace(debug), null, 2);
-  payloadLogView.textContent = JSON.stringify(payloadTrace(debug), null, 2);
+  renderTraceLog(debug);
+  renderChunksLog(debug);
+  renderPayloadLog(debug);
 }
 
-function compactTrace(debug) {
+function renderTraceLog(debug) {
+  clearNode(traceLogView);
   if (!debug) {
-    return {status: "empty"};
+    appendLogBlock(traceLogView, "Trace", [{label: "status", value: "empty"}]);
+    return;
   }
-  var trace = {};
-  ["status", "provider", "model", "base_url", "message", "validation", "models"].forEach(function(key) {
-    if (debug[key] !== undefined) {
-      trace[key] = debug[key];
-    }
+  appendLogBlock(traceLogView, "Request", [
+    {label: "created_at", value: debug.created_at},
+    {label: "provider", value: debug.provider},
+    {label: "model", value: debug.model},
+    {label: "base_url", value: debug.base_url},
+    {label: "message", value: debug.message !== undefined ? debug.message : "not available"}
+  ]);
+  renderHistoryBlock(debug.history || []);
+  (debug.llm || []).forEach(function(item, index) {
+    var rows = [
+      {label: "step", value: String(index + 1)},
+      {label: "purpose", value: item.purpose},
+      {label: "status", value: item.status},
+      {label: "fallback_used", value: item.fallback_used},
+      {label: "endpoint", value: item.endpoint || "not called"},
+      {label: "reason", value: item.reason},
+      {label: "message", value: item.message},
+      {label: "previous_request_type", value: item.previous_request_type},
+      {label: "previous_draft", value: item.previous_draft},
+      {label: "classification", value: formatClassification(item.classification)},
+      {label: "guarded_from", value: formatClassification(item.guarded_classification)},
+      {label: "guarded_reason", value: item.guarded_reason},
+      {label: "response", value: item.response},
+      {label: "error", value: item.error},
+      {label: "eval_count", value: item.eval_count},
+      {label: "prompt_eval_count", value: item.prompt_eval_count}
+    ];
+    appendLogBlock(traceLogView, "LLM Decision", rows);
   });
   if (debug.rag) {
-    trace.rag = {
-      top_k: debug.rag.top_k,
-      request_type: debug.rag.request_type,
-      missing_fields: debug.rag.missing_fields || [],
-      chunk_count: debug.rag.chunks ? debug.rag.chunks.length : 0
-    };
+    appendLogBlock(traceLogView, "RAG", [
+      {label: "top_k", value: debug.rag.top_k},
+      {label: "request_type", value: debug.rag.request_type},
+      {label: "missing_fields", value: (debug.rag.missing_fields || []).join(", ") || "none"},
+      {label: "chunks", value: debug.rag.chunks ? debug.rag.chunks.length : 0}
+    ]);
   }
-  trace.llm = (debug.llm || []).map(function(item) {
-    return {
-      purpose: item.purpose,
-      status: item.status,
-      fallback_used: item.fallback_used,
-      provider: item.provider,
-      model: item.model,
-      endpoint: item.endpoint,
-      options: item.options,
-      response: item.response,
-      classification: item.classification,
-      error: item.error,
-      eval_count: item.eval_count,
-      prompt_eval_count: item.prompt_eval_count
-    };
-  });
-  trace.created_at = debug.created_at;
-  trace.history = (debug.history || []).map(function(item) {
-    return {
-      role: item.role,
-      created_at: item.created_at,
-      content: item.content
-    };
-  });
-  return trace;
+  if (debug.validation) {
+    appendLogBlock(traceLogView, "Validation", [
+      {label: "valid", value: debug.validation.valid},
+      {label: "violations", value: (debug.validation.violations || []).join(", ") || "none"}
+    ]);
+  }
+  if (debug.models) {
+    appendLogBlock(traceLogView, "Models", [
+      {label: "status", value: debug.models.status},
+      {label: "endpoint", value: debug.models.endpoint},
+      {label: "models", value: (debug.models.models || []).join(", ")},
+      {label: "error", value: debug.models.error}
+    ]);
+  }
 }
 
-function chunkTrace(debug) {
-  if (!debug || !debug.rag || !debug.rag.chunks) {
-    return [];
+function renderHistoryBlock(history) {
+  var block = createLogBlock("Dialog History");
+  if (!history.length) {
+    block.appendChild(logRow("messages", "empty"));
+    traceLogView.appendChild(block);
+    return;
   }
-  return debug.rag.chunks.map(function(chunk) {
-    return {
-      rank: chunk.rank,
-      id: chunk.id,
-      title: chunk.title,
-      category: chunk.category,
-      reference: chunk.reference,
-      score: chunk.score,
-      characters: chunk.characters,
-      text: chunk.text
-    };
+  history.forEach(function(item) {
+    var message = document.createElement("div");
+    message.className = "log-message";
+    var meta = document.createElement("div");
+    meta.className = "log-message-role";
+    meta.textContent = (item.role || "unknown") + " · " + formatTime(item.created_at);
+    var content = document.createElement("div");
+    content.textContent = item.content || "";
+    message.appendChild(meta);
+    message.appendChild(content);
+    block.appendChild(message);
+  });
+  traceLogView.appendChild(block);
+}
+
+function renderChunksLog(debug) {
+  clearNode(chunksLogView);
+  var chunks = debug && debug.rag ? debug.rag.chunks || [] : [];
+  if (!chunks.length) {
+    appendLogBlock(chunksLogView, "Chunks", [{label: "status", value: "empty"}]);
+    return;
+  }
+  chunks.forEach(function(chunk) {
+    appendLogBlock(chunksLogView, "Chunk " + chunk.rank, [
+      {label: "id", value: chunk.id},
+      {label: "title", value: chunk.title},
+      {label: "category", value: chunk.category},
+      {label: "reference", value: chunk.reference},
+      {label: "score", value: chunk.score},
+      {label: "characters", value: chunk.characters},
+      {label: "text", value: chunk.text}
+    ]);
   });
 }
 
-function payloadTrace(debug) {
+function renderPayloadLog(debug) {
+  clearNode(payloadLogView);
   if (!debug || !debug.llm || !debug.llm.length) {
-    return {status: "empty", message: "LLM payload is not available yet"};
+    appendLogBlock(payloadLogView, "Payload", [{label: "status", value: "LLM payload is not available yet"}]);
+    return;
   }
-  return debug.llm.map(function(trace) {
-    return {
-      purpose: trace.purpose,
-      status: trace.status,
-      fallback_used: trace.fallback_used,
-      endpoint: trace.endpoint,
-      model: trace.model,
-      options: trace.options,
-      payload: trace.payload,
+  debug.llm.forEach(function(trace, index) {
+    var block = createLogBlock("Payload " + (index + 1) + ": " + (trace.purpose || "unknown"));
+    block.appendChild(logRow("status", trace.status));
+    block.appendChild(logRow("endpoint", trace.endpoint || "not called"));
+    block.appendChild(logRow("model", trace.model));
+    block.appendChild(logRow("classification", formatClassification(trace.classification)));
+    block.appendChild(logJson("request", trace.payload || {status: "not available"}));
+    block.appendChild(logJson("response", {
       response: trace.response,
-      classification: trace.classification,
+      fallback: trace.fallback,
       error: trace.error,
       eval_count: trace.eval_count,
       prompt_eval_count: trace.prompt_eval_count
-    };
+    }));
+    payloadLogView.appendChild(block);
   });
+}
+
+function clearNode(node) {
+  while (node.firstChild) {
+    node.removeChild(node.firstChild);
+  }
+}
+
+function createLogBlock(title) {
+  var block = document.createElement("section");
+  block.className = "log-block";
+  var heading = document.createElement("h3");
+  heading.textContent = title;
+  block.appendChild(heading);
+  return block;
+}
+
+function appendLogBlock(parent, title, rows) {
+  var block = createLogBlock(title);
+  rows.forEach(function(row) {
+    if (row.value !== undefined && row.value !== null && row.value !== "") {
+      block.appendChild(logRow(row.label, row.value));
+    }
+  });
+  parent.appendChild(block);
+}
+
+function logRow(label, value) {
+  var row = document.createElement("div");
+  row.className = "log-row";
+  var key = document.createElement("div");
+  key.className = "log-label";
+  key.textContent = label;
+  var val = document.createElement("div");
+  val.className = "log-value";
+  val.textContent = formatLogValue(value);
+  row.appendChild(key);
+  row.appendChild(val);
+  return row;
+}
+
+function logJson(label, value) {
+  var wrap = document.createElement("div");
+  wrap.className = "log-json-wrap";
+  var key = document.createElement("div");
+  key.className = "log-label";
+  key.textContent = label;
+  var pre = document.createElement("pre");
+  pre.className = "log-json";
+  pre.textContent = JSON.stringify(value, null, 2);
+  wrap.appendChild(key);
+  wrap.appendChild(pre);
+  return wrap;
+}
+
+function formatClassification(value) {
+  if (!value) {
+    return "";
+  }
+  return [value.action, value.confidence, value.reason].filter(function(item) {
+    return item !== undefined && item !== null && item !== "";
+  }).join(" · ");
+}
+
+function formatLogValue(value) {
+  if (typeof value === "object") {
+    return JSON.stringify(value, null, 2);
+  }
+  return String(value);
 }
 
 function setActiveLogTab(tabName) {

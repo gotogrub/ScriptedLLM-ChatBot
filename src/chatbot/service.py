@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 
 from chatbot.config import load_settings
 from chatbot.data import DataRepository
@@ -48,6 +49,11 @@ class ChatbotService:
             result = self.status_result(user_id)
             self.storage.add_message(user_id, "assistant", result.answer)
             return result
+        if control == "cancel" and self.cancel_contains_replacement(text, session):
+            llm_traces.append(self.reset_trace(session, text))
+            self.storage.reset_session(user_id)
+            session = self.storage.load_session(user_id)
+            control = None
         if control == "cancel":
             self.storage.reset_session(user_id)
             result = ChatResult(
@@ -105,12 +111,13 @@ class ChatbotService:
             session["request_type"] = request_type
             session["draft"] = {}
         previous_draft = session.get("draft", {})
-        updates = extract_entities(request_type, text, self.repository, user_id, previous_draft, turn.get("action"))
+        entity_text = self.entity_text(text, turn)
+        updates = extract_entities(request_type, entity_text, self.repository, user_id, previous_draft, turn.get("action"))
         has_progress = self.has_progress(previous_draft, updates)
         session["draft"] = self.merge_draft(previous_draft, updates)
         missing = self.missing_fields(request_type, session["draft"])
         field = missing[0] if missing else None
-        citations = self.retrieve_citations(text, request_type, options, field, session["draft"])
+        citations = self.retrieve_citations(entity_text, request_type, options, field, session["draft"])
         session["state"] = self.workflow.next_state(missing)
         if missing:
             attempts = self.register_missing_attempt(session, missing[0], has_progress)
@@ -191,6 +198,25 @@ class ChatbotService:
                 rows.append(f"{ticket['id']}: {title}, статус {ticket['status']}")
             answer = "Последние заявки:\n" + "\n".join(rows)
         return ChatResult(user_id=user_id, answer=answer, state="status", intent="status")
+
+    def cancel_contains_replacement(self, text, session):
+        if not session.get("request_type"):
+            return False
+        if not self.repository.classify_catalog_items(text):
+            return False
+        value = text.lower().replace("ё", "е")
+        markers = ["перепутал", "перепутала", "ошибка", "ошибся", "ошиблась", "хочу", "а "]
+        return any(marker in value for marker in markers)
+
+    def reset_trace(self, session, text):
+        return {
+            "purpose": "session_reset",
+            "status": "applied",
+            "reason": "cancel with replacement item",
+            "message": text,
+            "previous_request_type": session.get("request_type"),
+            "previous_draft": session.get("draft", {}),
+        }
 
     def interpret_turn(self, text, session, options):
         fallback = self.turn_fallback(text, session)
@@ -305,6 +331,19 @@ class ChatbotService:
 
     def catalog_item_names(self):
         return [item.name for item in self.repository.catalog.items]
+
+    def entity_text(self, text, turn):
+        if turn.get("action") not in ["replace_items", "order"]:
+            return text
+        value = text.lower().replace("ё", "е")
+        if not any(marker in value for marker in ["перепутал", "перепутала", "ошибка", "ошибся", "ошиблась", "а нет", "не "]):
+            return text
+        matches = list(re.finditer(r"\bа\s+", value))
+        for match in reversed(matches):
+            tail = text[match.end():].strip(" ,.")
+            if self.repository.classify_catalog_items(tail):
+                return tail
+        return text
 
     def looks_like_procurement_request(self, text):
         value = text.lower().replace("ё", "е")

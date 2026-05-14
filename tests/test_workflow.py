@@ -113,6 +113,16 @@ class WorkflowTest(unittest.TestCase):
             items = {item["name"]: item["quantity"] for item in result.draft["items"]}
             self.assertEqual(items, {"Кофе": 2, "Печенье": 1})
 
+    def test_cancel_with_replacement_resets_old_items_and_extracts_new_item(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            service.handle_message("demo", "Я хочу заказать два карандаша")
+            result = service.handle_message("demo", "А нет. отмена, я перепутал, не два карандаша, а две баночки кофия")
+            items = {item["name"]: item["quantity"] for item in result.draft["items"]}
+            self.assertEqual(items, {"Кофе": 2})
+            self.assertEqual(result.intent, "stationery_order")
+            self.assertEqual(result.missing_fields, ["office", "delivery_priority"])
+
     def test_procurement_remove_item_from_draft(self):
         with TemporaryDirectory() as tmp:
             service = self.service(tmp)
@@ -149,6 +159,15 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(history[-2]["role"], "user")
             self.assertEqual(history[-1]["role"], "assistant")
             self.assertIn("created_at", result.debug)
+
+    def test_llm_pipe_classification_uses_safe_fallback_action(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            result = service.llm.parse_classification(
+                '{"action":"order|replace_items","confidence":1.0,"reason":"catalog item"}',
+                {"action": "order", "confidence": 0.75, "reason": "catalog item"},
+            )
+            self.assertEqual(result["action"], "order")
 
     def test_procurement_continues_after_scenario_button(self):
         with TemporaryDirectory() as tmp:
