@@ -1,4 +1,4 @@
-name: "AХО Assistant"
+name: "Assistant"
 initial_state: idle
 states:
   idle:
@@ -26,9 +26,9 @@ states:
 knowledge_base:
   - data/knowledge.json
   - data/employees.json
+  - data/catalog.reg
 constraints:
   - answer_only_with_allowed_facts
   - ask_follow_up_when_required_fields_missing
   - do_not_claim_completion_before_ticket_status_created
   - do_not_offer_unlisted_services
-

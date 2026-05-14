@@ -1,7 +1,8 @@
 import math
 import re
 
-from aho_bot.schemas import KnowledgeHit
+from chatbot.langchain_bridge import make_document
+from chatbot.schemas import KnowledgeHit
 
 
 TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
@@ -14,11 +15,23 @@ def tokenize(text):
 class RagRetriever:
     def __init__(self, documents):
         self.documents = documents
+        self.langchain_documents = []
         self.index = []
         for document in documents:
             text_parts = [document.get("title", ""), document.get("text", "")]
             text_parts.extend(document.get("facts", []))
             text = " ".join(text_parts)
+            self.langchain_documents.append(
+                make_document(
+                    text,
+                    {
+                        "id": document.get("id", ""),
+                        "title": document.get("title", ""),
+                        "category": document.get("category", ""),
+                        "source": document.get("source", ""),
+                    },
+                )
+            )
             tokens = set(tokenize(text))
             self.index.append((document, tokens))
 

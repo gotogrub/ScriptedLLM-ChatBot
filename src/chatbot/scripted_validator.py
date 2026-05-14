@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
 import re
 
-from aho_bot.domain import REQUEST_SPECS
-from aho_bot.schemas import ValidationOutcome
+from chatbot.domain import REQUEST_SPECS
+from chatbot.schemas import ValidationOutcome
 
 
 @dataclass
@@ -18,11 +18,33 @@ class LocalOutputValidator:
 
     def validate(self, response, knowledge_base, current_state, allowed_facts=None):
         violations = []
+        violations.extend(self.check_missing_fields(response, current_state))
+        violations.extend(self.check_completion_claim(response, current_state))
         violations.extend(self.check_prices(response, knowledge_base))
         violations.extend(self.check_forbidden_claims(response, knowledge_base))
         if violations:
             return LocalScriptedResult(False, "", violations)
         return LocalScriptedResult(True, response, [])
+
+    def check_missing_fields(self, response, current_state):
+        if "ask_follow_up_when_required_fields_missing" not in self.constraints:
+            return []
+        missing = state_value(current_state, "missing_fields", [])
+        if not missing:
+            return []
+        value = response.lower()
+        if "?" in response or any(word in value for word in ["уточните", "напишите", "укажите", "выберите"]):
+            return []
+        return ["При незаполненных полях нужен уточняющий вопрос"]
+
+    def check_completion_claim(self, response, current_state):
+        if "do_not_claim_completion_before_ticket_status_created" not in self.constraints:
+            return []
+        status = state_value(current_state, "status", "")
+        value = response.lower()
+        if status != "ticket_created" and any(phrase in value for phrase in ["заявка создана", "заявка оформлена"]):
+            return ["Нельзя заявлять о создании заявки до статуса created"]
+        return []
 
     def check_prices(self, response, knowledge_base):
         violations = []
@@ -57,6 +79,12 @@ def contains_forbidden_claim(response, claim):
     return False
 
 
+def state_value(current_state, key, default=None):
+    if isinstance(current_state, dict):
+        return current_state.get(key, default)
+    return default
+
+
 def import_output_validator():
     try:
         from scriptedllm.core.validator import OutputValidator
@@ -69,13 +97,12 @@ class ScriptedLLMValidator:
     def __init__(self, repository):
         output_validator = import_output_validator()
         self.repository = repository
-        self.output_validator = output_validator(
-            [
-                "answer_only_with_allowed_facts",
-                "ask_follow_up_when_required_fields_missing",
-                "do_not_claim_completion_before_ticket_status_created",
-            ]
-        )
+        self.constraints = [
+            "answer_only_with_allowed_facts",
+            "ask_follow_up_when_required_fields_missing",
+            "do_not_claim_completion_before_ticket_status_created",
+        ]
+        self.output_validator = output_validator(self.constraints)
         self.knowledge_base = self.build_scripted_knowledge_base()
 
     def build_scripted_knowledge_base(self):
@@ -87,10 +114,18 @@ class ScriptedLLMValidator:
         delivery = {"approved": " ".join(self.repository.allowed_numbers())}
         return {"products": products, "delivery": delivery}
 
-    def validate_response(self, response, request_type, citations=None):
+    def validate_response(self, response, request_type, citations=None, missing_fields=None, state=None):
         citations = citations or []
         allowed = REQUEST_SPECS.get(request_type or "", {}).get("allowed_categories", [])
-        scripted = self.output_validator.validate(response, self.knowledge_base, request_type or "idle", allowed)
+        current_state = {
+            "request_type": request_type or "idle",
+            "missing_fields": missing_fields or [],
+            "status": state or "idle",
+        }
+        try:
+            scripted = self.output_validator.validate(response, self.knowledge_base, current_state, allowed)
+        except Exception:
+            scripted = LocalOutputValidator(self.constraints).validate(response, self.knowledge_base, current_state, allowed)
         if not scripted.valid:
             return ValidationOutcome(False, list(scripted.violations))
         forbidden = []

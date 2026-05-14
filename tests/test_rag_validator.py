@@ -5,10 +5,10 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from aho_bot.config import Settings
-from aho_bot.data import DataRepository
-from aho_bot.rag import RagRetriever
-from aho_bot.scripted_validator import ScriptedLLMValidator
+from chatbot.config import Settings
+from chatbot.data import DataRepository
+from chatbot.rag import RagRetriever
+from chatbot.scripted_validator import ScriptedLLMValidator
 
 
 class RagValidatorTest(unittest.TestCase):
@@ -42,11 +42,36 @@ class RagValidatorTest(unittest.TestCase):
             result = validator.validate_response(
                 "Оформлю скидку на заказ канцтоваров.",
                 "stationery_order",
-                citations=[type("Citation", (), {"source": "KB-AHO-001"})()],
+                citations=[type("Citation", (), {"source": "policy:procurement"})()],
+            )
+            self.assertFalse(result.valid)
+
+    def test_validator_requires_follow_up_for_missing_fields(self):
+        with TemporaryDirectory() as tmp:
+            repository = DataRepository(self.settings(tmp))
+            validator = ScriptedLLMValidator(repository)
+            result = validator.validate_response(
+                "Собрал данные для заявки.",
+                "stationery_order",
+                citations=[type("Citation", (), {"source": "policy:procurement"})()],
+                missing_fields=["items"],
+                state="collecting",
+            )
+            self.assertFalse(result.valid)
+
+    def test_validator_rejects_early_completion_claim(self):
+        with TemporaryDirectory() as tmp:
+            repository = DataRepository(self.settings(tmp))
+            validator = ScriptedLLMValidator(repository)
+            result = validator.validate_response(
+                "Заявка создана.",
+                "stationery_order",
+                citations=[type("Citation", (), {"source": "policy:procurement"})()],
+                missing_fields=[],
+                state="ready_for_confirmation",
             )
             self.assertFalse(result.valid)
 
 
 if __name__ == "__main__":
     unittest.main()
-

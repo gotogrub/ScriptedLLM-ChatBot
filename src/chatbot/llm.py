@@ -3,7 +3,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from aho_bot.schemas import LLMResult
+from chatbot.schemas import LLMResult
 
 
 class LLMClient:

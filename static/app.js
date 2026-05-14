@@ -61,7 +61,7 @@ function renderQuickReplies(items) {
 function renderSources(items) {
   sourcesView.innerHTML = "";
   if (!items || !items.length) {
-    sourcesView.textContent = "Источники появятся после запроса";
+    sourcesView.textContent = "RAG-контекст появится после запроса";
     return;
   }
   items.forEach(function(item) {
@@ -69,7 +69,7 @@ function renderSources(items) {
     block.className = "source-item";
     var title = document.createElement("div");
     title.className = "source-title";
-    title.textContent = item.title + ", " + item.source + ", score " + item.score;
+    title.textContent = item.title + ", score " + item.score;
     var text = document.createElement("div");
     text.textContent = item.text;
     block.appendChild(title);
@@ -164,7 +164,7 @@ function chunkTrace(debug) {
       id: chunk.id,
       title: chunk.title,
       category: chunk.category,
-      source: chunk.source,
+      reference: chunk.reference,
       score: chunk.score,
       characters: chunk.characters,
       text: chunk.text
@@ -344,7 +344,7 @@ resetButton.addEventListener("click", function() {
   }).then(function() {
     draftView.textContent = "Нет активного черновика";
     ticketView.textContent = "Заявка еще не создана";
-    sourcesView.textContent = "Источники появятся после запроса";
+    sourcesView.textContent = "RAG-контекст появится после запроса";
     renderLogs({status: "reset"});
     quickReplies.innerHTML = "";
     appendMessage("assistant", "Диалог сброшен.");

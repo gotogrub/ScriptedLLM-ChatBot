@@ -5,8 +5,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from aho_bot.config import Settings
-from aho_bot.service import AhoBotService
+from chatbot.config import Settings
+from chatbot.service import ChatbotService
 
 
 class WorkflowTest(unittest.TestCase):
@@ -24,7 +24,7 @@ class WorkflowTest(unittest.TestCase):
             host="127.0.0.1",
             port=0,
         )
-        return AhoBotService(settings)
+        return ChatbotService(settings)
 
     def test_stationery_ticket_flow(self):
         with TemporaryDirectory() as tmp:
@@ -64,6 +64,16 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(result.request_type, "stationery_order")
             self.assertEqual([item["name"] for item in result.draft["items"]], ["Карандаши", "Молоко", "Кофе"])
             self.assertIn("item_quantities", result.missing_fields)
+
+    def test_procurement_catalog_splits_item_categories(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            result = service.handle_message("demo", "Закажи линейки и кофе")
+            item_categories = {item["category"] for item in result.draft["items"]}
+            citation_titles = {item["title"] for item in result.citations}
+            self.assertEqual(item_categories, {"Канцтовары", "Продукты"})
+            self.assertIn("Каталог Комус: Канцтовары", citation_titles)
+            self.assertIn("Каталог ВкусВилл: Продукты", citation_titles)
 
     def test_procurement_continues_after_scenario_button(self):
         with TemporaryDirectory() as tmp:
@@ -162,14 +172,22 @@ class WorkflowTest(unittest.TestCase):
                 "Напишите, что нужно заказать. Можно перечислить товары или прислать ссылку.",
             )
 
-    def test_procurement_ticket_sources_do_not_include_employee_directory(self):
+    def test_ticket_does_not_expose_internal_sources(self):
         with TemporaryDirectory() as tmp:
             service = self.service(tmp)
             service.handle_message("demo", "Нужно 10 карандашей и 2 линейки в центральный офис сегодня")
             result = service.handle_message("demo", "Подтвердить")
-            sources = {item["source"] for item in result.ticket["sources"]}
-            self.assertNotIn("KB-HR-001", sources)
-            self.assertNotIn("KB-AHO-OFFICE-003", sources)
+            self.assertNotIn("sources", result.ticket)
+            self.assertNotIn("Источник", result.answer)
+
+    def test_repeated_unrecognized_item_gets_helpless_phrase(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            service.handle_message("demo", "Заказ канцтоваров")
+            service.handle_message("demo", "гвозди")
+            result = service.handle_message("demo", "шурупы")
+            self.assertEqual(result.intent, "needs_rephrase")
+            self.assertIn("Не смог распознать товар", result.answer)
 
 
 if __name__ == "__main__":

@@ -24,130 +24,6 @@ NUMBER_WORDS = {
 }
 
 
-ITEM_KEYWORDS = {
-    "ручк": {
-        "name": "Ручки",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/pens",
-    },
-    "карандаш": {
-        "name": "Карандаши",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/pencils",
-    },
-    "линейк": {
-        "name": "Линейки",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/rulers",
-    },
-    "ластик": {
-        "name": "Ластики",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/erasers",
-    },
-    "скрепк": {
-        "name": "Скрепки",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/paper-clips",
-    },
-    "папк": {
-        "name": "Папки",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/folders",
-    },
-    "блокнот": {
-        "name": "Блокнот",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/notebooks",
-    },
-    "бумаг": {
-        "name": "Бумага А4",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/a4-paper",
-    },
-    "а4": {
-        "name": "Бумага А4",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/a4-paper",
-    },
-    "маркер": {
-        "name": "Маркеры",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/markers",
-    },
-    "стикер": {
-        "name": "Стикеры",
-        "category": "Канцтовары",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/sticky-notes",
-    },
-    "коф": {
-        "name": "Кофе",
-        "category": "Продукты",
-        "supplier": "ВкусВилл",
-        "url": "https://vkusvill.example/catalog/coffee",
-    },
-    "молок": {
-        "name": "Молоко",
-        "category": "Продукты",
-        "supplier": "ВкусВилл",
-        "url": "https://vkusvill.example/catalog/milk",
-    },
-    "чай": {
-        "name": "Чай",
-        "category": "Продукты",
-        "supplier": "ВкусВилл",
-        "url": "https://vkusvill.example/catalog/tea",
-    },
-    "сахар": {
-        "name": "Сахар",
-        "category": "Продукты",
-        "supplier": "ВкусВилл",
-        "url": "https://vkusvill.example/catalog/sugar",
-    },
-    "печень": {
-        "name": "Печенье",
-        "category": "Продукты",
-        "supplier": "ВкусВилл",
-        "url": "https://vkusvill.example/catalog/cookies",
-    },
-    "вод": {
-        "name": "Вода",
-        "category": "Продукты",
-        "supplier": "ВкусВилл",
-        "url": "https://vkusvill.example/catalog/water",
-    },
-    "фрукт": {
-        "name": "Фрукты",
-        "category": "Продукты",
-        "supplier": "ВкусВилл",
-        "url": "https://vkusvill.example/catalog/fruits",
-    },
-    "стаканчик": {
-        "name": "Стаканчики",
-        "category": "Кухня",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/cups",
-    },
-    "салфет": {
-        "name": "Салфетки",
-        "category": "Кухня",
-        "supplier": "Комус",
-        "url": "https://komus.example/catalog/napkins",
-    },
-}
-
-
 CITIES = {
     "питер": "Санкт-Петербург",
     "санкт-петербург": "Санкт-Петербург",
@@ -239,15 +115,12 @@ def extract_office(text):
     return None
 
 
-def extract_items(text, current_draft):
-    value = lower_text(text)
+def extract_items(text, current_draft, repository):
     found = []
     url_match = re.search(r"https?://\S+", text)
     if url_match:
         found.append({"name": "Товар по ссылке", "quantity": first_number(text), "url": url_match.group(0)})
-    for key, item in ITEM_KEYWORDS.items():
-        if key in value:
-            found.append({**item, "quantity": None, "_pos": value.find(key)})
+    found.extend(repository.classify_catalog_items(text))
     found.sort(key=lambda item: item.get("_pos", 0))
     found = unique_items(found)
     if not found and current_draft.get("items"):
@@ -267,6 +140,7 @@ def extract_items(text, current_draft):
             return existing
     for item in found:
         item.pop("_pos", None)
+        item.pop("catalog_group", None)
     return unique_items(found)
 
 
@@ -521,7 +395,7 @@ def extract_entities(request_type, text, repository, user_id, current_draft):
     if employee:
         result["employee"] = employee
     if request_type == "stationery_order":
-        items = extract_items(text, current_draft)
+        items = extract_items(text, current_draft, repository)
         if items:
             result["items"] = items
         office = extract_office(text)

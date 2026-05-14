@@ -4,9 +4,9 @@ from urllib.parse import parse_qs, urlparse
 import json
 import mimetypes
 
-from aho_bot.config import load_settings
-from aho_bot.schemas import to_plain
-from aho_bot.service import AhoBotService
+from chatbot.config import load_settings
+from chatbot.schemas import to_plain
+from chatbot.service import ChatbotService
 
 
 SERVICE = None
@@ -113,7 +113,7 @@ class AhoRequestHandler(BaseHTTPRequestHandler):
 def main():
     global SERVICE, SETTINGS
     SETTINGS = load_settings()
-    SERVICE = AhoBotService(SETTINGS)
+    SERVICE = ChatbotService(SETTINGS)
     server = ThreadingHTTPServer((SETTINGS.host, SETTINGS.port), AhoRequestHandler)
     print(f"Server started at http://{SETTINGS.host}:{SETTINGS.port}")
     try:

@@ -3,16 +3,19 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "scriptedllm-aho-chatbot"
+name = "scriptedllm-chatbot"
 version = "0.1.0"
-description = "RAG chatbot prototype for administrative office requests with ScriptedLLM validation"
+description = "RAG chatbot prototype with LangGraph orchestration and ScriptedLLM validation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "CC0-1.0"}
 authors = [
     {name = "Nrdrive test prototype"}
 ]
-dependencies = []
+dependencies = [
+    "langchain-core>=0.3.0",
+    "langgraph>=0.2.0",
+]
 
 [project.optional-dependencies]
 scriptedllm = [
@@ -23,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-aho-bot = "aho_bot.server:main"
+chatbot = "chatbot.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

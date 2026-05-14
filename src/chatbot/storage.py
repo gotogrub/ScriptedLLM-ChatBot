@@ -25,10 +25,12 @@ class ChatStorage:
                     state text not null,
                     request_type text,
                     draft_json text not null,
+                    metadata_json text not null default '{}',
                     updated_at text not null
                 )
                 """
             )
+            self.ensure_session_columns(connection)
             connection.execute(
                 """
                 create table if not exists messages (
@@ -64,19 +66,25 @@ class ChatStorage:
             "state": row["state"],
             "request_type": row["request_type"],
             "draft": json.loads(row["draft_json"]),
+            **json.loads(row["metadata_json"] or "{}"),
         }
 
     def save_session(self, session):
         now = utc_now()
+        metadata = {
+            "field_attempts": session.get("field_attempts", {}),
+            "last_missing_field": session.get("last_missing_field"),
+        }
         with self.connect() as connection:
             connection.execute(
                 """
-                insert into sessions (user_id, state, request_type, draft_json, updated_at)
-                values (?, ?, ?, ?, ?)
+                insert into sessions (user_id, state, request_type, draft_json, metadata_json, updated_at)
+                values (?, ?, ?, ?, ?, ?)
                 on conflict(user_id) do update set
                     state = excluded.state,
                     request_type = excluded.request_type,
                     draft_json = excluded.draft_json,
+                    metadata_json = excluded.metadata_json,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -84,9 +92,16 @@ class ChatStorage:
                     session["state"],
                     session.get("request_type"),
                     json.dumps(session.get("draft", {}), ensure_ascii=False),
+                    json.dumps(metadata, ensure_ascii=False),
                     now,
                 ),
             )
+
+    def ensure_session_columns(self, connection):
+        rows = connection.execute("pragma table_info(sessions)").fetchall()
+        columns = {row[1] for row in rows}
+        if "metadata_json" not in columns:
+            connection.execute("alter table sessions add column metadata_json text not null default '{}'")
 
     def reset_session(self, user_id):
         with self.connect() as connection:

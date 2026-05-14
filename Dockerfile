@@ -9,10 +9,9 @@ COPY static ./static
 
 RUN pip install --no-cache-dir -e .
 
-ENV AHO_HOST=0.0.0.0
-ENV AHO_PORT=8080
+ENV CHATBOT_HOST=0.0.0.0
+ENV CHATBOT_PORT=8080
 
 EXPOSE 8080
 
-CMD ["python", "-m", "aho_bot"]
-
+CMD ["python", "-m", "chatbot"]

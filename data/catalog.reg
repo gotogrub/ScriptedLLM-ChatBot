@@ -1,0 +1,21 @@
+category stationery | Канцтовары | Комус
+item Ручки | https://komus.example/catalog/pens | ручк, ручка, ручки, ручек
+item Карандаши | https://komus.example/catalog/pencils | карандаш, карандаши, карандашей
+item Линейки | https://komus.example/catalog/rulers | линейк, линейка, линейки, линеек
+item Ластики | https://komus.example/catalog/erasers | ластик, ластики, ластиков
+item Скрепки | https://komus.example/catalog/paper-clips | скрепк, скрепки, скрепок
+item Папки | https://komus.example/catalog/folders | папк, папка, папки, папок
+item Блокнот | https://komus.example/catalog/notebooks | блокнот, блокноты, блокнотов
+item Бумага А4 | https://komus.example/catalog/a4-paper | бумаг, бумага, а4
+item Маркеры | https://komus.example/catalog/markers | маркер, маркеры, маркеров
+item Стикеры | https://komus.example/catalog/sticky-notes | стикер, стикеры, стикеров
+item Стаканчики | https://komus.example/catalog/cups | стаканчик, стаканчики, стаканчиков
+item Салфетки | https://komus.example/catalog/napkins | салфет, салфетки, салфеток
+category groceries | Продукты | ВкусВилл
+item Кофе | https://vkusvill.example/catalog/coffee | коф, кофе, кофи
+item Молоко | https://vkusvill.example/catalog/milk | молок, молоко, молока
+item Чай | https://vkusvill.example/catalog/tea | чай
+item Сахар | https://vkusvill.example/catalog/sugar | сахар
+item Печенье | https://vkusvill.example/catalog/cookies | печень, печенье
+item Вода | https://vkusvill.example/catalog/water | вод, вода, воды
+item Фрукты | https://vkusvill.example/catalog/fruits | фрукт, фрукты, фруктов

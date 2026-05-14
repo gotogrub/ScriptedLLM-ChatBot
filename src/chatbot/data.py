@@ -1,6 +1,8 @@
 from pathlib import Path
 import json
 
+from chatbot.catalog import CatalogClassifier
+
 
 def load_json(path):
     with Path(path).open("r", encoding="utf-8") as file:
@@ -12,6 +14,7 @@ class DataRepository:
         self.settings = settings
         self.employees = load_json(settings.data_dir / "employees.json")
         self.knowledge = load_json(settings.data_dir / "knowledge.json")
+        self.catalog = CatalogClassifier(settings.data_dir / "catalog.reg")
 
     def get_employee_by_user_id(self, user_id):
         for employee in self.employees:
@@ -43,6 +46,7 @@ class DataRepository:
 
     def documents(self):
         docs = list(self.knowledge.get("documents", []))
+        docs.extend(self.catalog.documents())
         for office in self.knowledge.get("offices", []):
             docs.append(
                 {
@@ -60,13 +64,16 @@ class DataRepository:
                 "id": "employees_generated",
                 "title": "Справочник сотрудников",
                 "category": "employees",
-                "source": "KB-HR-001",
+                "source": "employees",
                 "text": self.employee_context(),
                 "facts": [employee["name"] for employee in self.employees],
                 "forbidden_claims": [],
             }
         )
         return docs
+
+    def classify_catalog_items(self, text):
+        return self.catalog.classify(text)
 
     def forbidden_claims(self):
         claims = []
@@ -83,4 +90,3 @@ class DataRepository:
                     numbers.add(digits)
         numbers.update(["2026", "2027", "2028"])
         return sorted(numbers)
-

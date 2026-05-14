@@ -2,19 +2,20 @@ from datetime import datetime, timezone
 import hashlib
 import json
 
-from aho_bot.config import load_settings
-from aho_bot.data import DataRepository
-from aho_bot.domain import FIELD_LABELS, REQUEST_SPECS, SCENARIO_CHOICES
-from aho_bot.entities import extract_entities
-from aho_bot.intents import classify_control, classify_request_type, is_capability_question, is_procurement_capability_question
-from aho_bot.llm import LLMClient
-from aho_bot.rag import RagRetriever
-from aho_bot.schemas import ChatResult, to_plain
-from aho_bot.scripted_validator import ScriptedLLMValidator
-from aho_bot.storage import ChatStorage
+from chatbot.config import load_settings
+from chatbot.data import DataRepository
+from chatbot.domain import FIELD_LABELS, REQUEST_SPECS, SCENARIO_CHOICES
+from chatbot.entities import extract_entities
+from chatbot.intents import classify_control, classify_request_type, is_capability_question, is_procurement_capability_question
+from chatbot.llm import LLMClient
+from chatbot.rag import RagRetriever
+from chatbot.schemas import ChatResult, to_plain
+from chatbot.scripted_validator import ScriptedLLMValidator
+from chatbot.storage import ChatStorage
+from chatbot.workflow import ConversationWorkflow
 
 
-class AhoBotService:
+class ChatbotService:
     def __init__(self, settings=None):
         self.settings = settings or load_settings()
         self.repository = DataRepository(self.settings)
@@ -22,6 +23,7 @@ class AhoBotService:
         self.retriever = RagRetriever(self.repository.documents())
         self.validator = ScriptedLLMValidator(self.repository)
         self.llm = LLMClient(self.settings)
+        self.workflow = ConversationWorkflow()
 
     def handle_message(self, user_id, message, runtime_options=None):
         options = self.llm.runtime_options(runtime_options)
@@ -69,6 +71,8 @@ class AhoBotService:
             self.storage.add_message(user_id, "assistant", result.answer)
             return result
         request_type = session.get("request_type") or classify_request_type(text)
+        if not request_type and self.repository.classify_catalog_items(text):
+            request_type = "stationery_order"
         if not request_type:
             result = self.unknown_intent(user_id)
             self.storage.add_message(user_id, "assistant", result.answer)
@@ -76,26 +80,34 @@ class AhoBotService:
         if not session.get("request_type"):
             session["request_type"] = request_type
             session["draft"] = {}
-        updates = extract_entities(request_type, text, self.repository, user_id, session.get("draft", {}))
-        session["draft"] = self.merge_draft(session.get("draft", {}), updates)
+        previous_draft = session.get("draft", {})
+        updates = extract_entities(request_type, text, self.repository, user_id, previous_draft)
+        has_progress = self.has_progress(previous_draft, updates)
+        session["draft"] = self.merge_draft(previous_draft, updates)
         missing = self.missing_fields(request_type, session["draft"])
         field = missing[0] if missing else None
         citations = self.retrieve_citations(text, request_type, options, field, session["draft"])
+        session["state"] = self.workflow.next_state(missing)
         if missing:
-            session["state"] = "collecting"
-            llm_result = self.ask_for_field(request_type, missing[0], citations, options, session["draft"])
-            answer = llm_result.text
-            llm_traces.append(llm_result.trace)
+            attempts = self.register_missing_attempt(session, missing[0], has_progress)
             quick_replies = REQUEST_SPECS[request_type].get("quick_replies", {}).get(missing[0], [])
-            intent = request_type
+            if attempts >= 2:
+                answer = self.helpless_answer(request_type, missing[0])
+                intent = "needs_rephrase"
+            else:
+                llm_result = self.ask_for_field(request_type, missing[0], citations, options, session["draft"])
+                answer = llm_result.text
+                llm_traces.append(llm_result.trace)
+                intent = request_type
         else:
-            session["state"] = "ready_for_confirmation"
+            session["field_attempts"] = {}
+            session["last_missing_field"] = None
             llm_result = self.confirmation_text(request_type, session["draft"], citations, options)
             answer = llm_result.text
             llm_traces.append(llm_result.trace)
             quick_replies = ["Подтвердить", "Изменить", "Отменить"]
             intent = "ready_for_confirmation"
-        validation = self.validator.validate_response(answer, request_type, citations)
+        validation = self.validator.validate_response(answer, request_type, citations, missing, session["state"])
         if not validation.valid:
             answer = "Не могу отдать этот ответ: он не прошел ScriptedLLM-валидацию. Уточните данные по заявке."
             quick_replies = ["Отменить"]
@@ -158,6 +170,47 @@ class AhoBotService:
                 merged[key] = value
         return merged
 
+    def has_progress(self, draft, updates):
+        for key, value in updates.items():
+            if value in [None, "", []]:
+                continue
+            if key == "items":
+                if self.items_have_progress(draft.get("items") or [], value):
+                    return True
+                continue
+            if draft.get(key) != value:
+                return True
+        return False
+
+    def items_have_progress(self, existing, incoming):
+        current = {item.get("url") or item.get("name"): item.get("quantity") for item in existing}
+        for item in incoming:
+            marker = item.get("url") or item.get("name")
+            if marker not in current:
+                return True
+            if item.get("quantity") and item.get("quantity") != current.get(marker):
+                return True
+        return False
+
+    def register_missing_attempt(self, session, field, has_progress):
+        attempts = session.get("field_attempts") or {}
+        if has_progress or session.get("last_missing_field") != field:
+            attempts[field] = 0
+        else:
+            attempts[field] = attempts.get(field, 0) + 1
+        session["field_attempts"] = attempts
+        session["last_missing_field"] = field
+        return attempts[field]
+
+    def helpless_answer(self, request_type, field):
+        if request_type == "stationery_order" and field in ["items", "item_quantities"]:
+            return "Не смог распознать товар по каталогу. Напишите позицию из каталога или пришлите ссылку на товар."
+        if field == "office":
+            return "Не смог определить офис. Выберите Центральный офис, Склад или Сервис-центр."
+        if field == "delivery_priority":
+            return "Не смог определить срочность. Напишите срочно, сегодня или планово."
+        return "Не смог уверенно разобрать ответ. Переформулируйте одним сообщением с нужными данными."
+
     def merge_items(self, existing, incoming):
         result = [dict(item) for item in existing]
         for new_item in incoming:
@@ -189,11 +242,7 @@ class AhoBotService:
         if is_procurement_capability_question(text):
             request_type = "stationery_order"
             citations = self.retrieve_citations(text, request_type, options)
-            answer = (
-                "Можно заказать канцтовары из Комус: ручки, карандаши, линейки, ластики, скрепки, папки, бумагу А4, блокноты, маркеры, стикеры, стаканчики и салфетки.\n"
-                "Из ВкусВилл доступны продукты для кухни: кофе, молоко, чай, сахар, печенье, вода и фрукты.\n"
-                "Напишите позиции и количество, можно также прислать ссылку на товар."
-            )
+            answer = self.procurement_catalog_answer()
             quick_replies = ["Карандаши 10, линейки 2", "Бумага А4 5 пачек", "Ссылка на товар, 5 штук"]
         else:
             request_type = session.get("request_type")
@@ -214,6 +263,14 @@ class AhoBotService:
             citations=[to_plain(item) for item in citations],
             debug=self.debug_payload(options, text, request_type, [], citations, [], None),
         )
+
+    def procurement_catalog_answer(self):
+        rows = []
+        for group in self.repository.catalog.groups:
+            names = ", ".join(item.name.lower() for item in group.items)
+            rows.append(f"{group.label} через {group.supplier}: {names}.")
+        rows.append("Напишите позиции и количество, можно также прислать ссылку на товар.")
+        return "\n".join(rows)
 
     def ask_for_field(self, request_type, field, citations, options, draft):
         question = self.follow_up_fallback(request_type, field, draft)
@@ -266,9 +323,6 @@ class AhoBotService:
         title = REQUEST_SPECS[request_type]["title"]
         lines = [f"Собрал данные для заявки: {title}.", self.render_draft(request_type, draft)]
         lines.append("Подтвердите создание заявки или напишите, что изменить.")
-        source_text = self.source_line(citations)
-        if source_text:
-            lines.append(source_text)
         fallback = "\n".join(line for line in lines if line)
         return self.llm.compose(
             json.dumps(draft, ensure_ascii=False),
@@ -342,7 +396,6 @@ class AhoBotService:
             "user_id": user_id,
             "status": "created",
             "payload": draft,
-            "sources": [{"title": item.title, "source": item.source} for item in citations],
             "created_at": now,
             "updated_at": now,
         }
@@ -403,12 +456,6 @@ class AhoBotService:
             used += len(text)
         return "\n".join(rows)
 
-    def source_line(self, citations):
-        if not citations:
-            return ""
-        sources = ", ".join(item.source for item in citations)
-        return f"Источник: {sources}."
-
     def render_draft(self, request_type, draft):
         lines = []
         for field in REQUEST_SPECS[request_type]["required_fields"]:
@@ -468,7 +515,7 @@ class AhoBotService:
             "id": item.id,
             "title": item.title,
             "category": item.category,
-            "source": item.source,
+            "reference": item.source,
             "score": item.score,
             "characters": len(item.text),
             "text": item.text,

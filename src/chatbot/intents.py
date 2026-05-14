@@ -1,4 +1,4 @@
-from aho_bot.domain import SCENARIO_CHOICES
+from chatbot.domain import SCENARIO_CHOICES
 import re
 
 
