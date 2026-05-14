@@ -123,12 +123,13 @@ def extract_items(text, current_draft, repository):
     found.extend(repository.classify_catalog_items(text))
     found.sort(key=lambda item: item.get("_pos", 0))
     found = unique_items(found)
-    if not found and current_draft.get("items"):
+    explicit_found = bool(found)
+    if not explicit_found and current_draft.get("items"):
         found = [dict(item) for item in current_draft.get("items", [])]
     quantities = quantity_mentions(text)
     if found and any("_pos" in item for item in found):
         assign_quantities_to_items(found, quantities)
-    if current_draft.get("items") and quantities:
+    if not explicit_found and current_draft.get("items") and quantities:
         existing = [dict(item) for item in current_draft.get("items", [])]
         missing = [item for item in existing if not item.get("quantity")]
         if len(missing) == 1:
@@ -398,6 +399,8 @@ def extract_entities(request_type, text, repository, user_id, current_draft):
         items = extract_items(text, current_draft, repository)
         if items:
             result["items"] = items
+            if should_replace_items(text, current_draft):
+                result["_replace_items"] = True
         office = extract_office(text)
         if office:
             result["office"] = office
@@ -466,3 +469,19 @@ def extract_entities(request_type, text, repository, user_id, current_draft):
         if criticality:
             result["criticality"] = criticality
     return result
+
+
+def should_replace_items(text, current_draft):
+    if not current_draft.get("items"):
+        return False
+    value = lower_text(text)
+    markers = [
+        "я хочу заказать",
+        "хочу заказать",
+        "нужно заказать",
+        "надо заказать",
+        "закажи",
+        "купить",
+        "купи",
+    ]
+    return any(marker in value for marker in markers)

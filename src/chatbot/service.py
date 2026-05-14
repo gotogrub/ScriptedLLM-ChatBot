@@ -161,10 +161,13 @@ class ChatbotService:
 
     def merge_draft(self, draft, updates):
         merged = dict(draft)
+        replace_items = updates.get("_replace_items", False)
         for key, value in updates.items():
+            if key.startswith("_"):
+                continue
             if value in [None, "", []]:
                 continue
-            if key == "items" and merged.get("items"):
+            if key == "items" and merged.get("items") and not replace_items:
                 merged["items"] = self.merge_items(merged["items"], value)
             else:
                 merged[key] = value
@@ -173,6 +176,8 @@ class ChatbotService:
     def has_progress(self, draft, updates):
         for key, value in updates.items():
             if value in [None, "", []]:
+                continue
+            if key.startswith("_"):
                 continue
             if key == "items":
                 if self.items_have_progress(draft.get("items") or [], value):

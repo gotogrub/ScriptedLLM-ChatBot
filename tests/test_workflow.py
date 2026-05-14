@@ -75,6 +75,14 @@ class WorkflowTest(unittest.TestCase):
             self.assertIn("Каталог Комус: Канцтовары", citation_titles)
             self.assertIn("Каталог ВкусВилл: Продукты", citation_titles)
 
+    def test_new_explicit_procurement_request_replaces_stale_items(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            service.handle_message("demo", "Закажи линейки и кофе")
+            result = service.handle_message("demo", "Я хочу заказать 10 карандашей и две банки кофе")
+            items = {item["name"]: item["quantity"] for item in result.draft["items"]}
+            self.assertEqual(items, {"Карандаши": 10, "Кофе": 2})
+
     def test_procurement_continues_after_scenario_button(self):
         with TemporaryDirectory() as tmp:
             service = self.service(tmp)
