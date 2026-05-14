@@ -29,6 +29,17 @@ python -m chatbot
 
 Open `http://127.0.0.1:8081`.
 
+## Docker
+
+Build the image and run it on the host network when Ollama is installed locally.
+
+```bash
+docker build -t scriptedllm-chatbot .
+docker run -d --name scriptedllm-chatbot --network host -e CHATBOT_HOST=127.0.0.1 -e CHATBOT_PORT=8081 -e CHATBOT_LLM_PROVIDER=ollama -e CHATBOT_LLM_MODEL=qwen2.5:7b -e CHATBOT_LLM_BASE_URL=http://127.0.0.1:11434 scriptedllm-chatbot
+```
+
+Open `http://127.0.0.1:8081`. Stop it with `docker stop scriptedllm-chatbot`.
+
 ## Test
 
 ```bash
