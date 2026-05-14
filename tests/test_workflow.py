@@ -169,6 +169,24 @@ class WorkflowTest(unittest.TestCase):
             )
             self.assertEqual(result["action"], "order")
 
+    def test_remove_item_classification_is_guarded_when_draft_is_empty(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            turn = {
+                "action": "remove_items",
+                "confidence": 0.9,
+                "reason": "model saw negation",
+                "trace": {"classification": {"action": "remove_items"}},
+            }
+            result = service.guard_turn(
+                turn,
+                {"action": "order", "confidence": 0.75, "reason": "catalog item"},
+                "не два карандаша, а две баночки кофия",
+                {"draft": {}},
+            )
+            self.assertEqual(result["action"], "order")
+            self.assertEqual(result["trace"]["guarded_reason"], "no draft to remove from")
+
     def test_procurement_continues_after_scenario_button(self):
         with TemporaryDirectory() as tmp:
             service = self.service(tmp)

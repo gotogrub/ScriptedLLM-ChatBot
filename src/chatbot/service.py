@@ -240,6 +240,9 @@ class ChatbotService:
         action = turn.get("action")
         if action == "replace_items" and not draft_items:
             guarded = {"action": "order", "confidence": fallback.get("confidence", 0.75), "reason": "no draft to replace"}
+        if action == "remove_items" and not draft_items:
+            guarded = dict(fallback)
+            guarded["reason"] = "no draft to remove from"
         if action in ["replace_items", "remove_items"] and not catalog_items:
             guarded = dict(fallback)
         if action == "order" and not catalog_items and not self.is_expected_field_answer(text, session):
