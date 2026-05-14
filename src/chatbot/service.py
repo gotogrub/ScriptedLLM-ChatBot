@@ -204,7 +204,28 @@ class ChatbotService:
             "catalog_items": self.catalog_item_names(),
             "fallback": fallback,
         }
-        return self.llm.classify_turn(text, context, options)
+        turn = self.llm.classify_turn(text, context, options)
+        return self.guard_turn(turn, fallback, text, session)
+
+    def guard_turn(self, turn, fallback, text, session):
+        guarded = None
+        catalog_items = self.repository.classify_catalog_items(text)
+        draft_items = session.get("draft", {}).get("items") or []
+        action = turn.get("action")
+        if action == "replace_items" and not draft_items:
+            guarded = {"action": "order", "confidence": fallback.get("confidence", 0.75), "reason": "no draft to replace"}
+        if action in ["replace_items", "remove_items"] and not catalog_items:
+            guarded = dict(fallback)
+        if action == "order" and not catalog_items and not self.is_expected_field_answer(text, session):
+            guarded = dict(fallback)
+        if guarded:
+            turn.update(guarded)
+            trace = turn.get("trace")
+            if trace:
+                trace["guarded_classification"] = trace.get("classification")
+                trace["classification"] = {key: value for key, value in guarded.items() if key in ["action", "confidence", "reason"]}
+                trace["guarded_reason"] = guarded.get("reason")
+        return turn
 
     def turn_fallback(self, text, session):
         request_type = session.get("request_type")
