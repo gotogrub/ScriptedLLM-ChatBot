@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 
 
 @dataclass
@@ -35,7 +36,7 @@ class CatalogClassifier:
             line = raw_line.strip()
             if not line:
                 continue
-            parts = [part.strip() for part in line.split("|")]
+            parts = [part.strip() for part in line.split("|", 2)]
             head = parts[0]
             if head.startswith("category ") and len(parts) >= 3:
                 key = head.split(" ", 1)[1].strip()
@@ -43,7 +44,7 @@ class CatalogClassifier:
                 self.groups.append(current)
                 continue
             if head.startswith("item ") and current and len(parts) >= 3:
-                patterns = [item.strip().lower().replace("ё", "е") for item in parts[2].split(",") if item.strip()]
+                patterns = [item.strip().replace("ё", "е") for item in parts[2].split(",") if item.strip()]
                 item = CatalogItem(
                     name=head.split(" ", 1)[1].strip(),
                     category=current.label,
@@ -56,7 +57,7 @@ class CatalogClassifier:
                 self.items.append(item)
 
     def classify(self, text):
-        value = text.lower().replace("ё", "е")
+        value = text.replace("ё", "е")
         found = []
         for item in self.items:
             position = self.match_position(value, item.patterns)
@@ -76,7 +77,21 @@ class CatalogClassifier:
         return sorted(found, key=lambda item: item["_pos"])
 
     def match_position(self, value, patterns):
-        matches = [value.find(pattern) for pattern in patterns if pattern and value.find(pattern) >= 0]
+        matches = []
+        normalized = value.lower()
+        for pattern in patterns:
+            if pattern.startswith("rx:"):
+                try:
+                    match = re.search(pattern[3:], value, re.IGNORECASE)
+                except re.error:
+                    match = None
+                if match:
+                    matches.append(match.start())
+                continue
+            simple = pattern.lower()
+            position = normalized.find(simple)
+            if position >= 0:
+                matches.append(position)
         if not matches:
             return None
         return min(matches)

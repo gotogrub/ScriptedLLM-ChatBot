@@ -12,7 +12,7 @@ item Стикеры | https://komus.example/catalog/sticky-notes | стикер,
 item Стаканчики | https://komus.example/catalog/cups | стаканчик, стаканчики, стаканчиков
 item Салфетки | https://komus.example/catalog/napkins | салфет, салфетки, салфеток
 category groceries | Продукты | ВкусВилл
-item Кофе | https://vkusvill.example/catalog/coffee | коф, кофе, кофи
+item Кофе | https://vkusvill.example/catalog/coffee | rx:\b[Кк](офе[йяеикю]?|офи)\b, коф
 item Молоко | https://vkusvill.example/catalog/milk | молок, молоко, молока
 item Чай | https://vkusvill.example/catalog/tea | чай
 item Сахар | https://vkusvill.example/catalog/sugar | сахар

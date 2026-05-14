@@ -75,6 +75,13 @@ class WorkflowTest(unittest.TestCase):
             self.assertIn("Каталог Комус: Канцтовары", citation_titles)
             self.assertIn("Каталог ВкусВилл: Продукты", citation_titles)
 
+    def test_procurement_catalog_regex_handles_coffee_typos(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            for word in ["кофе", "кофей", "кофея", "кофею", "кофек", "кофи", "Кофе"]:
+                found = service.repository.classify_catalog_items(f"2 банки {word}")
+                self.assertEqual(found[0]["name"], "Кофе")
+
     def test_new_explicit_procurement_request_replaces_stale_items(self):
         with TemporaryDirectory() as tmp:
             service = self.service(tmp)

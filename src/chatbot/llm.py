@@ -3,6 +3,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from chatbot.prompt_safety import sanitize_for_llm
 from chatbot.schemas import LLMResult
 
 
@@ -51,14 +52,11 @@ class LLMClient:
 
     def call_ollama(self, user_message, facts, fallback, options, purpose):
         url = options["base_url"].rstrip("/") + "/api/chat"
-        system = self.system_prompt(facts, fallback)
+        messages = self.prepare_messages(user_message, facts, fallback)
         payload = {
             "model": options["model"],
             "stream": False,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_message},
-            ],
+            "messages": messages,
             "options": {
                 "temperature": options["temperature"],
                 "top_p": options["top_p"],
@@ -104,15 +102,12 @@ class LLMClient:
             trace["fallback"] = fallback
             return LLMResult(fallback, trace)
         url = options["base_url"].rstrip("/") + "/chat/completions"
-        system = self.system_prompt(facts, fallback)
+        messages = self.prepare_messages(user_message, facts, fallback)
         payload = {
             "model": options["model"],
             "temperature": options["temperature"],
             "top_p": options["top_p"],
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_message},
-            ],
+            "messages": messages,
         }
         trace = self.trace_template("openai-compatible", options, purpose)
         trace["endpoint"] = url
@@ -170,6 +165,15 @@ class LLMClient:
             f"Факты:\n{facts}\n\n"
             f"Черновик:\n{fallback}"
         )
+
+    def prepare_messages(self, user_message, facts, fallback):
+        safe_user_message = sanitize_for_llm(user_message)
+        safe_facts = sanitize_for_llm(facts)
+        safe_fallback = sanitize_for_llm(fallback)
+        return [
+            {"role": "system", "content": self.system_prompt(safe_facts, safe_fallback)},
+            {"role": "user", "content": safe_user_message},
+        ]
 
     def trace_template(self, provider, options, purpose):
         return {
