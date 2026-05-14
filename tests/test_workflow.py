@@ -82,6 +82,21 @@ class WorkflowTest(unittest.TestCase):
                 found = service.repository.classify_catalog_items(f"2 банки {word}")
                 self.assertEqual(found[0]["name"], "Кофе")
 
+    def test_procurement_catalog_regex_handles_other_declensions(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            samples = {
+                "2 ручки": "Ручки",
+                "3 карандашами": "Карандаши",
+                "4 линейками": "Линейки",
+                "5 салфеток": "Салфетки",
+                "6 пачек печенья": "Печенье",
+                "7 бутылок воды": "Вода",
+            }
+            for text, name in samples.items():
+                found = service.repository.classify_catalog_items(text)
+                self.assertEqual(found[0]["name"], name)
+
     def test_new_explicit_procurement_request_replaces_stale_items(self):
         with TemporaryDirectory() as tmp:
             service = self.service(tmp)
@@ -89,6 +104,51 @@ class WorkflowTest(unittest.TestCase):
             result = service.handle_message("demo", "Я хочу заказать 10 карандашей и две банки кофе")
             items = {item["name"]: item["quantity"] for item in result.draft["items"]}
             self.assertEqual(items, {"Карандаши": 10, "Кофе": 2})
+
+    def test_procurement_correction_replaces_old_items_and_defaults_single_pack(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            service.handle_message("demo", "Надо 100 штук карандашей")
+            result = service.handle_message("demo", "А нет ошибка, хочу две банки кофе и еще пожалуйста упаковку печенья")
+            items = {item["name"]: item["quantity"] for item in result.draft["items"]}
+            self.assertEqual(items, {"Кофе": 2, "Печенье": 1})
+
+    def test_procurement_remove_item_from_draft(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            service.handle_message("demo", "Нужно 10 карандашей, две банки кофе и упаковку печенья")
+            result = service.handle_message("demo", "Нет, карандаши убери")
+            items = {item["name"]: item["quantity"] for item in result.draft["items"]}
+            self.assertEqual(items, {"Кофе": 2, "Печенье": 1})
+            self.assertEqual(result.missing_fields, ["office", "delivery_priority"])
+
+    def test_active_procurement_knowledge_question_does_not_change_draft(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            service.handle_message("demo", "Нужно 2 пачки кофе")
+            result = service.handle_message("demo", "Расскажи всю информацию в какие офисы и как я могу доставить")
+            self.assertEqual(result.intent, "knowledge_answer")
+            self.assertEqual(result.draft["items"][0]["name"], "Кофе")
+            categories = {item["category"] for item in result.citations}
+            self.assertIn("procurement", categories)
+            self.assertIn("offices", categories)
+
+    def test_unknown_procurement_item_goes_to_knowledge_answer(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            result = service.handle_message("demo", "Я хочу заказать плюшевого мишку")
+            self.assertEqual(result.intent, "knowledge_answer")
+            self.assertIn("Не нашел", result.answer)
+
+    def test_debug_trace_contains_message_history(self):
+        with TemporaryDirectory() as tmp:
+            service = self.service(tmp)
+            result = service.handle_message("demo", "Нужно 2 пачки кофе")
+            history = result.debug["history"]
+            self.assertGreaterEqual(len(history), 2)
+            self.assertEqual(history[-2]["role"], "user")
+            self.assertEqual(history[-1]["role"], "assistant")
+            self.assertIn("created_at", result.debug)
 
     def test_procurement_continues_after_scenario_button(self):
         with TemporaryDirectory() as tmp:

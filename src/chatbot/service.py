@@ -5,7 +5,13 @@ import json
 from chatbot.config import load_settings
 from chatbot.data import DataRepository
 from chatbot.domain import FIELD_LABELS, REQUEST_SPECS, SCENARIO_CHOICES
-from chatbot.entities import extract_entities
+from chatbot.entities import (
+    extract_delivery_priority,
+    extract_entities,
+    extract_office,
+    is_remove_items_request,
+    should_replace_items,
+)
 from chatbot.intents import classify_control, classify_request_type, is_capability_question, is_procurement_capability_question
 from chatbot.llm import LLMClient
 from chatbot.rag import RagRetriever
@@ -70,18 +76,36 @@ class ChatbotService:
             )
             self.storage.add_message(user_id, "assistant", result.answer)
             return result
+        turn = self.interpret_turn(text, session, options)
+        if turn.get("trace"):
+            llm_traces.append(turn["trace"])
+        if self.should_answer_with_knowledge(text, session, turn):
+            result = self.knowledge_result(user_id, text, options, session, extra_traces=llm_traces)
+            self.storage.add_message(user_id, "assistant", result.answer)
+            return result
         request_type = session.get("request_type") or classify_request_type(text)
-        if not request_type and self.repository.classify_catalog_items(text):
+        catalog_items = self.repository.classify_catalog_items(text)
+        if not request_type and catalog_items and turn.get("action") not in ["knowledge_question", "unknown"]:
             request_type = "stationery_order"
         if not request_type:
-            result = self.unknown_intent(user_id)
+            if self.looks_like_procurement_request(text):
+                result = self.knowledge_result(
+                    user_id,
+                    text,
+                    options,
+                    session,
+                    force_procurement=True,
+                    extra_traces=llm_traces,
+                )
+            else:
+                result = self.unknown_intent(user_id)
             self.storage.add_message(user_id, "assistant", result.answer)
             return result
         if not session.get("request_type"):
             session["request_type"] = request_type
             session["draft"] = {}
         previous_draft = session.get("draft", {})
-        updates = extract_entities(request_type, text, self.repository, user_id, previous_draft)
+        updates = extract_entities(request_type, text, self.repository, user_id, previous_draft, turn.get("action"))
         has_progress = self.has_progress(previous_draft, updates)
         session["draft"] = self.merge_draft(previous_draft, updates)
         missing = self.missing_fields(request_type, session["draft"])
@@ -124,7 +148,16 @@ class ChatbotService:
             citations=[to_plain(item) for item in citations],
             validated=validation.valid,
             violations=validation.violations,
-            debug=self.debug_payload(options, text, request_type, missing, citations, llm_traces, validation),
+            debug=self.debug_payload(
+                options,
+                text,
+                request_type,
+                missing,
+                citations,
+                llm_traces,
+                validation,
+                self.debug_history(user_id, answer),
+            ),
         )
         self.storage.add_message(user_id, "assistant", result.answer)
         return result
@@ -159,9 +192,189 @@ class ChatbotService:
             answer = "Последние заявки:\n" + "\n".join(rows)
         return ChatResult(user_id=user_id, answer=answer, state="status", intent="status")
 
+    def interpret_turn(self, text, session, options):
+        fallback = self.turn_fallback(text, session)
+        request_type = session.get("request_type")
+        missing = self.missing_fields(request_type, session.get("draft", {})) if request_type else []
+        context = {
+            "request_type": request_type,
+            "state": session.get("state", "idle"),
+            "missing_fields": missing,
+            "draft": session.get("draft", {}),
+            "catalog_items": self.catalog_item_names(),
+            "fallback": fallback,
+        }
+        return self.llm.classify_turn(text, context, options)
+
+    def turn_fallback(self, text, session):
+        request_type = session.get("request_type")
+        draft = session.get("draft", {})
+        missing = self.missing_fields(request_type, draft) if request_type else []
+        catalog_items = self.repository.classify_catalog_items(text)
+        if is_remove_items_request(text):
+            return {"action": "remove_items", "confidence": 0.9, "reason": "remove marker"}
+        if self.local_knowledge_question(text, session):
+            return {"action": "knowledge_question", "confidence": 0.85, "reason": "knowledge marker"}
+        if catalog_items:
+            if should_replace_items(text, draft):
+                return {"action": "replace_items", "confidence": 0.9, "reason": "correction marker"}
+            if not request_type or self.catalog_text_is_order(text, missing):
+                return {"action": "order", "confidence": 0.75, "reason": "catalog item"}
+            return {"action": "unknown", "confidence": 0.55, "reason": "catalog mention without order intent"}
+        if self.is_expected_field_answer(text, session):
+            return {"action": "order", "confidence": 0.8, "reason": "expected field answer"}
+        if self.looks_like_procurement_request(text):
+            return {"action": "unknown", "confidence": 0.65, "reason": "unsupported procurement item"}
+        return {"action": "unknown", "confidence": 0.5, "reason": "no known intent"}
+
+    def catalog_text_is_order(self, text, missing):
+        value = text.lower().replace("ё", "е")
+        markers = [
+            "заказ",
+            "закаж",
+            "куп",
+            "нуж",
+            "надо",
+            "хочу",
+            "добав",
+            "еще",
+            "ещё",
+            "пожалуйста",
+        ]
+        if any(marker in value for marker in markers):
+            return True
+        return missing and missing[0] in ["items", "item_quantities"]
+
+    def local_knowledge_question(self, text, session):
+        value = text.lower().replace("ё", "е")
+        if any(marker in value for marker in ["расскажи", "что-нибудь", "что нибудь", "информац", "подробнее", "погоди"]):
+            return True
+        if "офис" in value and any(marker in value for marker in ["как", "куда", "какие", "все", "достав"]):
+            return True
+        if session.get("request_type") and "?" in text and not any(marker in value for marker in ["срочно", "сегодня", "планово"]):
+            return True
+        return False
+
+    def should_answer_with_knowledge(self, text, session, turn):
+        action = (turn or {}).get("action")
+        if action == "knowledge_question":
+            return True
+        if action == "unknown" and session.get("request_type") and not self.is_expected_field_answer(text, session):
+            missing = self.missing_fields(session["request_type"], session.get("draft", {}))
+            if missing and missing[0] in ["items", "item_quantities"] and not self.looks_like_procurement_request(text):
+                return False
+            return True
+        return self.local_knowledge_question(text, session) and not self.repository.classify_catalog_items(text)
+
+    def is_expected_field_answer(self, text, session):
+        request_type = session.get("request_type")
+        if not request_type:
+            return False
+        missing = self.missing_fields(request_type, session.get("draft", {}))
+        if not missing:
+            return False
+        field = missing[0]
+        if request_type == "stationery_order" and field == "office":
+            return bool(extract_office(text))
+        if request_type == "stationery_order" and field == "delivery_priority":
+            return bool(extract_delivery_priority(text))
+        if request_type == "stationery_order" and field in ["items", "item_quantities"]:
+            return bool(self.repository.classify_catalog_items(text))
+        return False
+
+    def catalog_item_names(self):
+        return [item.name for item in self.repository.catalog.items]
+
+    def looks_like_procurement_request(self, text):
+        value = text.lower().replace("ё", "е")
+        return any(marker in value for marker in ["заказать", "закажи", "купить", "купи", "нужен", "нужна", "нужно"])
+
+    def knowledge_result(self, user_id, text, options, session, force_procurement=False, extra_traces=None):
+        request_type = "stationery_order" if force_procurement else session.get("request_type")
+        categories = self.knowledge_categories(text, request_type)
+        citations = self.retrieve_mixed_citations(text, categories, options)
+        fallback = self.knowledge_fallback(text, request_type, citations, session)
+        prompt = (
+            "Ответь пользователю по-русски как АХО-ассистент. "
+            "Используй только факты из RAG-контекста и не меняй черновик заявки. "
+            f"Вопрос пользователя: {text}"
+        )
+        llm_result = self.llm.compose(prompt, self.facts_text(citations, 1200), fallback, options, "knowledge_answer")
+        validation = self.validator.validate_response(llm_result.text, request_type, citations, [], session.get("state", "idle"))
+        answer = llm_result.text if validation.valid else fallback
+        traces = list(extra_traces or [])
+        traces.append(llm_result.trace)
+        debug = self.debug_payload(
+            options,
+            text,
+            request_type,
+            [],
+            citations,
+            traces,
+            validation,
+            self.debug_history(user_id, answer),
+        )
+        return ChatResult(
+            user_id=user_id,
+            answer=answer,
+            state=session.get("state", "idle"),
+            intent="knowledge_answer",
+            request_type=request_type,
+            draft=session.get("draft", {}),
+            citations=[to_plain(item) for item in citations],
+            validated=validation.valid,
+            violations=validation.violations,
+            debug=debug,
+        )
+
+    def knowledge_categories(self, text, request_type):
+        value = text.lower().replace("ё", "е")
+        if request_type == "stationery_order" or any(marker in value for marker in ["заказ", "товар", "коф", "канц", "достав"]):
+            return ["procurement", "offices"]
+        if "офис" in value or "достав" in value:
+            return ["offices", "procurement"]
+        return ["procurement", "offices", "sim", "travel", "parking", "taxi", "incidents"]
+
+    def retrieve_mixed_citations(self, text, categories, options):
+        limit = self.clamp_int((options or {}).get("rag_top_k", self.settings.rag_top_k), 1, 8)
+        query = f"{text} каталог офис доставка регламент заявки АХО"
+        results = []
+        seen = set()
+        per_category = max(1, min(2, limit))
+        for category in categories:
+            for item in self.retriever.retrieve(query, categories=[category], limit=per_category):
+                marker = item.id or item.title
+                if marker not in seen:
+                    results.append(item)
+                    seen.add(marker)
+                if len(results) >= limit:
+                    return results
+        if not results:
+            return self.retriever.retrieve(query, limit=limit)
+        return results[:limit]
+
+    def knowledge_fallback(self, text, request_type, citations, session):
+        if self.looks_like_procurement_request(text) and not self.repository.classify_catalog_items(text):
+            return "Не нашел такую позицию в каталоге АХО. Могу помочь с заказом канцтоваров из Комус и продуктов из ВкусВилл."
+        if request_type == "stationery_order" or session.get("request_type") == "stationery_order":
+            office_rows = [
+                f"{office['name']}: {office['address']}"
+                for office in self.repository.knowledge.get("offices", [])
+            ]
+            rows = [self.procurement_catalog_answer(), "Офисы доставки: " + "; ".join(office_rows)]
+            if session.get("draft"):
+                rows.append("Текущий черновик не меняю.")
+            return "\n".join(rows)
+        if citations:
+            return self.facts_text(citations, 900)
+        return "Я могу рассказать про заявки АХО, доступные товары, офисы доставки и правила оформления."
+
     def merge_draft(self, draft, updates):
         merged = dict(draft)
         replace_items = updates.get("_replace_items", False)
+        remove_items = updates.get("_remove_items", [])
+        if remove_items:
+            merged["items"] = self.remove_items(merged.get("items") or [], remove_items)
         for key, value in updates.items():
             if key.startswith("_"):
                 continue
@@ -174,6 +387,8 @@ class ChatbotService:
         return merged
 
     def has_progress(self, draft, updates):
+        if updates.get("_remove_items") or updates.get("_replace_items"):
+            return True
         for key, value in updates.items():
             if value in [None, "", []]:
                 continue
@@ -231,6 +446,10 @@ class ChatbotService:
                 result.append(new_item)
         return result
 
+    def remove_items(self, existing, removed):
+        markers = {item.get("url") or item.get("name") for item in removed}
+        return [item for item in existing if (item.get("url") or item.get("name")) not in markers]
+
     def missing_fields(self, request_type, draft):
         missing = []
         for field in REQUEST_SPECS[request_type]["required_fields"]:
@@ -266,7 +485,7 @@ class ChatbotService:
             draft=session.get("draft", {}),
             quick_replies=quick_replies,
             citations=[to_plain(item) for item in citations],
-            debug=self.debug_payload(options, text, request_type, [], citations, [], None),
+            debug=self.debug_payload(options, text, request_type, [], citations, [], None, self.debug_history(user_id, answer)),
         )
 
     def procurement_catalog_answer(self):
@@ -361,7 +580,16 @@ class ChatbotService:
                 missing_fields=missing,
                 quick_replies=REQUEST_SPECS[request_type].get("quick_replies", {}).get(missing[0], []),
                 citations=[to_plain(item) for item in citations],
-                debug=self.debug_payload(options, "", request_type, missing, citations, [llm_result.trace], None),
+                debug=self.debug_payload(
+                    options,
+                    "",
+                    request_type,
+                    missing,
+                    citations,
+                    [llm_result.trace],
+                    None,
+                    self.debug_history(user_id, answer),
+                ),
             )
         ticket = self.build_ticket(user_id, request_type, draft, citations)
         validation = self.validator.validate_ticket(ticket)
@@ -375,7 +603,16 @@ class ChatbotService:
                 draft=draft,
                 violations=validation.violations,
                 validated=False,
-                debug=self.debug_payload(options, "", request_type, missing, citations, [], validation),
+                debug=self.debug_payload(
+                    options,
+                    "",
+                    request_type,
+                    missing,
+                    citations,
+                    [],
+                    validation,
+                    self.debug_history(user_id, "Заявка не создана: данные не прошли валидацию."),
+                ),
             )
         self.storage.create_ticket(ticket)
         self.storage.reset_session(user_id)
@@ -388,7 +625,7 @@ class ChatbotService:
             request_type=request_type,
             ticket=ticket,
             citations=[to_plain(item) for item in citations],
-            debug=self.debug_payload(options, "", request_type, [], citations, [], validation),
+            debug=self.debug_payload(options, "", request_type, [], citations, [], validation, self.debug_history(user_id, answer)),
         )
 
     def build_ticket(self, user_id, request_type, draft, citations):
@@ -413,6 +650,8 @@ class ChatbotService:
         return f"AHO-{suffix}"
 
     def retrieve_citations(self, text, request_type, options=None, field=None, draft=None):
+        if request_type == "stationery_order" and field == "office":
+            return self.retrieve_mixed_citations(text, ["procurement", "offices"], options or {})
         categories = self.retrieval_categories(request_type, field)
         query = f"{text} {REQUEST_SPECS[request_type]['title']}"
         limit = self.clamp_int((options or {}).get("rag_top_k", self.settings.rag_top_k), 1, 8)
@@ -492,8 +731,9 @@ class ChatbotService:
             return "; ".join(parts)
         return str(value)
 
-    def debug_payload(self, options, user_message, request_type, missing, citations, llm_traces, validation):
+    def debug_payload(self, options, user_message, request_type, missing, citations, llm_traces, validation, history=None):
         payload = {
+            "created_at": utc_now(),
             "provider": options.get("provider"),
             "model": options.get("model"),
             "base_url": options.get("base_url"),
@@ -504,6 +744,7 @@ class ChatbotService:
                 "chunks": [self.chunk_debug(index, item) for index, item in enumerate(citations, start=1)],
             },
             "llm": llm_traces,
+            "history": history or [],
         }
         if user_message:
             payload["message"] = user_message
@@ -513,6 +754,12 @@ class ChatbotService:
                 "violations": validation.violations,
             }
         return payload
+
+    def debug_history(self, user_id, pending_answer=None):
+        history = self.storage.recent_messages(user_id, limit=80)
+        if pending_answer:
+            history.append({"role": "assistant", "content": pending_answer, "created_at": utc_now()})
+        return history
 
     def chunk_debug(self, index, item):
         return {

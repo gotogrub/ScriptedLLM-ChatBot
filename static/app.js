@@ -26,7 +26,7 @@ var numCtxInput = document.getElementById("numCtxInput");
 var timeoutInput = document.getElementById("timeoutInput");
 var lastDebug = null;
 
-function appendMessage(role, text) {
+function appendMessage(role, text, timestamp) {
   var wrap = document.createElement("div");
   wrap.className = "message " + role;
   var bubble = document.createElement("div");
@@ -34,11 +34,19 @@ function appendMessage(role, text) {
   bubble.textContent = text;
   var meta = document.createElement("div");
   meta.className = "meta";
-  meta.textContent = role === "user" ? "Вы" : "Бот";
+  meta.textContent = (role === "user" ? "Вы" : "Бот") + " · " + formatTime(timestamp);
   wrap.appendChild(bubble);
   wrap.appendChild(meta);
   messages.appendChild(wrap);
   messages.scrollTop = messages.scrollHeight;
+}
+
+function formatTime(value) {
+  var date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    date = new Date();
+  }
+  return date.toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
 }
 
 function renderQuickReplies(items) {
@@ -115,7 +123,7 @@ function renderLogs(debug) {
   lastDebug = debug;
   traceLogView.textContent = JSON.stringify(compactTrace(debug), null, 2);
   chunksLogView.textContent = JSON.stringify(chunkTrace(debug), null, 2);
-  payloadLogView.textContent = JSON.stringify(firstPayload(debug), null, 2);
+  payloadLogView.textContent = JSON.stringify(payloadTrace(debug), null, 2);
 }
 
 function compactTrace(debug) {
@@ -146,9 +154,18 @@ function compactTrace(debug) {
       endpoint: item.endpoint,
       options: item.options,
       response: item.response,
+      classification: item.classification,
       error: item.error,
       eval_count: item.eval_count,
       prompt_eval_count: item.prompt_eval_count
+    };
+  });
+  trace.created_at = debug.created_at;
+  trace.history = (debug.history || []).map(function(item) {
+    return {
+      role: item.role,
+      created_at: item.created_at,
+      content: item.content
     };
   });
   return trace;
@@ -172,23 +189,26 @@ function chunkTrace(debug) {
   });
 }
 
-function firstPayload(debug) {
+function payloadTrace(debug) {
   if (!debug || !debug.llm || !debug.llm.length) {
     return {status: "empty", message: "LLM payload is not available yet"};
   }
-  var trace = debug.llm[0];
-  return {
-    status: trace.status,
-    fallback_used: trace.fallback_used,
-    endpoint: trace.endpoint,
-    model: trace.model,
-    options: trace.options,
-    payload: trace.payload,
-    response: trace.response,
-    error: trace.error,
-    eval_count: trace.eval_count,
-    prompt_eval_count: trace.prompt_eval_count
-  };
+  return debug.llm.map(function(trace) {
+    return {
+      purpose: trace.purpose,
+      status: trace.status,
+      fallback_used: trace.fallback_used,
+      endpoint: trace.endpoint,
+      model: trace.model,
+      options: trace.options,
+      payload: trace.payload,
+      response: trace.response,
+      classification: trace.classification,
+      error: trace.error,
+      eval_count: trace.eval_count,
+      prompt_eval_count: trace.prompt_eval_count
+    };
+  });
 }
 
 function setActiveLogTab(tabName) {

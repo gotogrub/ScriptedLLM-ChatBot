@@ -1,21 +1,21 @@
 category stationery | Канцтовары | Комус
-item Ручки | https://komus.example/catalog/pens | ручк, ручка, ручки, ручек
-item Карандаши | https://komus.example/catalog/pencils | карандаш, карандаши, карандашей
-item Линейки | https://komus.example/catalog/rulers | линейк, линейка, линейки, линеек
-item Ластики | https://komus.example/catalog/erasers | ластик, ластики, ластиков
-item Скрепки | https://komus.example/catalog/paper-clips | скрепк, скрепки, скрепок
-item Папки | https://komus.example/catalog/folders | папк, папка, папки, папок
-item Блокнот | https://komus.example/catalog/notebooks | блокнот, блокноты, блокнотов
-item Бумага А4 | https://komus.example/catalog/a4-paper | бумаг, бумага, а4
-item Маркеры | https://komus.example/catalog/markers | маркер, маркеры, маркеров
-item Стикеры | https://komus.example/catalog/sticky-notes | стикер, стикеры, стикеров
-item Стаканчики | https://komus.example/catalog/cups | стаканчик, стаканчики, стаканчиков
-item Салфетки | https://komus.example/catalog/napkins | салфет, салфетки, салфеток
+item Ручки | https://komus.example/catalog/pens | rx:\b[Рр]уч(?:к[а-я]*|ек)\b
+item Карандаши | https://komus.example/catalog/pencils | rx:\b[Кк]арандаш[а-я]*\b
+item Линейки | https://komus.example/catalog/rulers | rx:\b[Лл]ине(?:йк[а-я]*|ек)\b
+item Ластики | https://komus.example/catalog/erasers | rx:\b[Лл]астик[а-я]*\b
+item Скрепки | https://komus.example/catalog/paper-clips | rx:\b[Сс]креп(?:к[а-я]*|ок)\b
+item Папки | https://komus.example/catalog/folders | rx:\b[Пп]ап(?:к[а-я]*|ок)\b
+item Блокнот | https://komus.example/catalog/notebooks | rx:\b[Бб]локнот[а-я]*\b
+item Бумага А4 | https://komus.example/catalog/a4-paper | rx:\b[Бб]умаг[а-я]*\b, rx:\b[Аа]4\b
+item Маркеры | https://komus.example/catalog/markers | rx:\b[Мм]аркер[а-я]*\b
+item Стикеры | https://komus.example/catalog/sticky-notes | rx:\b[Сс]тикер[а-я]*\b
+item Стаканчики | https://komus.example/catalog/cups | rx:\b[Сс]таканчик[а-я]*\b
+item Салфетки | https://komus.example/catalog/napkins | rx:\b[Сс]алфет(?:к[а-я]*|ок)\b
 category groceries | Продукты | ВкусВилл
 item Кофе | https://vkusvill.example/catalog/coffee | rx:\b[Кк](офе[йяеикю]?|офи)\b, коф
-item Молоко | https://vkusvill.example/catalog/milk | молок, молоко, молока
-item Чай | https://vkusvill.example/catalog/tea | чай
-item Сахар | https://vkusvill.example/catalog/sugar | сахар
-item Печенье | https://vkusvill.example/catalog/cookies | печень, печенье
-item Вода | https://vkusvill.example/catalog/water | вод, вода, воды
-item Фрукты | https://vkusvill.example/catalog/fruits | фрукт, фрукты, фруктов
+item Молоко | https://vkusvill.example/catalog/milk | rx:\b[Мм]олок[а-я]*\b
+item Чай | https://vkusvill.example/catalog/tea | rx:\b[Чч]а(?:й|я|ю|е|ем)\b
+item Сахар | https://vkusvill.example/catalog/sugar | rx:\b[Сс]ахар[а-я]*\b
+item Печенье | https://vkusvill.example/catalog/cookies | rx:\b[Пп]ечен(?:ье|ья|ью|ьем|ий|ек)\b
+item Вода | https://vkusvill.example/catalog/water | rx:\b[Вв]од[а-я]*\b
+item Фрукты | https://vkusvill.example/catalog/fruits | rx:\b[Фф]рукт[а-я]*\b

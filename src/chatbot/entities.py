@@ -82,8 +82,21 @@ def quantity_mentions(text):
     for word, number in NUMBER_WORDS.items():
         for match in re.finditer(rf"\b{word}\b", value):
             found.append({"quantity": number, "pos": match.start()})
+    for match in re.finditer(r"\b(?:пачк|упаковк|банк|бутылк)[а-я]*\b", value):
+        if not has_quantity_before(value, match.start()):
+            found.append({"quantity": 1, "pos": match.start()})
     found.sort(key=lambda item: item["pos"])
     return found
+
+
+def has_quantity_before(value, position):
+    prefix = value[max(0, position - 18):position]
+    if re.search(r"\b\d+\s*$", prefix):
+        return True
+    for word in NUMBER_WORDS:
+        if re.search(rf"\b{word}\s*$", prefix):
+            return True
+    return False
 
 
 def extract_employee(text, repository, user_id, request_type):
@@ -390,17 +403,22 @@ def extract_criticality(text):
     return None
 
 
-def extract_entities(request_type, text, repository, user_id, current_draft):
+def extract_entities(request_type, text, repository, user_id, current_draft, turn_action=None):
     result = {}
     employee = extract_employee(text, repository, user_id, request_type)
     if employee:
         result["employee"] = employee
     if request_type == "stationery_order":
-        items = extract_items(text, current_draft, repository)
-        if items:
-            result["items"] = items
-            if should_replace_items(text, current_draft):
-                result["_replace_items"] = True
+        if turn_action == "remove_items" or is_remove_items_request(text):
+            removed_items = repository.classify_catalog_items(text)
+            if removed_items:
+                result["_remove_items"] = clean_catalog_items(removed_items)
+        else:
+            items = extract_items(text, current_draft, repository)
+            if items:
+                result["items"] = items
+                if turn_action == "replace_items" or should_replace_items(text, current_draft):
+                    result["_replace_items"] = True
         office = extract_office(text)
         if office:
             result["office"] = office
@@ -476,7 +494,15 @@ def should_replace_items(text, current_draft):
         return False
     value = lower_text(text)
     markers = [
+        "ошибка",
+        "ошибся",
+        "ошиблась",
+        "а нет",
+        "не то",
+        "передумал",
+        "передумала",
         "я хочу заказать",
+        "хочу ",
         "хочу заказать",
         "нужно заказать",
         "надо заказать",
@@ -485,3 +511,19 @@ def should_replace_items(text, current_draft):
         "купи",
     ]
     return any(marker in value for marker in markers)
+
+
+def is_remove_items_request(text):
+    value = lower_text(text)
+    return any(marker in value for marker in ["убери", "удали", "исключи", "вычеркни", "без "])
+
+
+def clean_catalog_items(items):
+    cleaned = []
+    for item in items:
+        copy = dict(item)
+        copy.pop("_pos", None)
+        copy.pop("catalog_group", None)
+        copy.pop("quantity", None)
+        cleaned.append(copy)
+    return cleaned
